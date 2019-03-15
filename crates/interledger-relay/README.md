@@ -1,3 +1,35 @@
+## Setup
+### Prerequisites
+
+Install rustup:
+
+    $ sudo pacman -S rustup
+
+Install a Rust toolchain:
+
+    $ rustup install stable
+    $ rustup default stable
+
+Get the code:
+
+    $ git clone git@github.com:coilhq/interledger-relay.git
+    $ cd interledger-relay/
+
+### Building
+
+
+Run the tests to make sure everything is working:
+
+    $ cargo test
+
+If they all pass, build the release executable:
+
+    $ cargo build --release
+
+The executable can be found at `target/release/ilprelay`.
+
+## Example
+
 ```
 RUST_LOG='info' \
 RELAY_BIND='127.0.0.1:3001' \
