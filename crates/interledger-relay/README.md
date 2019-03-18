@@ -17,7 +17,6 @@ Get the code:
 
 ### Building
 
-
 Run the tests to make sure everything is working:
 
     $ cargo test
@@ -65,3 +64,24 @@ RELAY_CONFIG='{
 	]
 }' ilprelay
 ```
+
+## Config
+
+### Next Hop
+#### Static
+
+    {
+      "type": "Static",
+      "address": "example.connector.address",
+      "asset_scale": 9,
+      "asset_code": "XRP"
+    }
+
+#### Dynamic
+
+    {
+      "type": "Dynamic",
+      "parent_endpoint": "http://example.com/ilp",
+      "parent_auth": "SECRET",
+      "name": "my_connector_name"
+    }

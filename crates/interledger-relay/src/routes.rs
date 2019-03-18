@@ -7,6 +7,9 @@ use serde::Deserialize;
 use crate::AuthToken;
 use crate::serde::deserialize_uri;
 
+// TODO validate target prefixes
+// TODO lint route order (i.e. check for unreachable)
+
 /// A simple static routing table.
 #[derive(Debug, PartialEq)]
 pub struct RoutingTable(Vec<Route>);
@@ -77,9 +80,14 @@ impl Route {
             // actually allocate.
             NextHop::Bilateral { endpoint, .. } => Ok(endpoint.clone()),
             NextHop::Multilateral { endpoint_prefix, endpoint_suffix, .. } => {
+                debug_assert!({
+                    let dst = destination_addr.as_ref();
+                    dst.starts_with(connector_addr.as_ref())
+                        && dst[connector_addr.len()] == b'.'
+                });
                 // TODO or use the route's target prefix instead of the connector address?
                 let destination_segment = match parse_address_segment(
-                    connector_addr,
+                    &self.target_prefix,
                     destination_addr.as_ref(),
                 ) {
                     Some(segment) => segment,
@@ -124,15 +132,11 @@ impl From<InvalidUriBytes> for RouterError {
     }
 }
 
-fn parse_address_segment<'a>(connector: ilp::Addr, destination: &'a [u8])
+fn parse_address_segment<'a>(target_prefix: &[u8], destination: &'a [u8])
     -> Option<&'a [u8]>
 {
-    let connector = connector.as_ref();
-    debug_assert!(
-        destination.starts_with(connector)
-            && destination[connector.len()] == b'.',
-    );
-    let segment_offset = connector.len() + 1;
+    debug_assert!(destination.starts_with(target_prefix));
+    let segment_offset = target_prefix.len();
     destination[segment_offset..]
         .split(|&byte| byte == b'.')
         .next()
@@ -262,15 +266,15 @@ mod test_helpers {
     #[test]
     fn test_parse_address_segment() {
         assert_eq!(
-            parse_address_segment(ilp::Addr::new(b"test.cx"), b"test.cx.alice"),
+            parse_address_segment(b"test.cx.", b"test.cx.alice"),
             Some(&b"alice"[..]),
         );
         assert_eq!(
-            parse_address_segment(ilp::Addr::new(b"test.cx"), b"test.cx.alice.bob"),
+            parse_address_segment(b"test.cx.", b"test.cx.alice.bob"),
             Some(&b"alice"[..]),
         );
         assert_eq!(
-            parse_address_segment(ilp::Addr::new(b"test.cx"), b"test.cx.alice!"),
+            parse_address_segment(b"test.cx.", b"test.cx.alice!"),
             None,
         );
     }
