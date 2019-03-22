@@ -11,6 +11,19 @@ type HyperClient = hyper::Client<hyper::client::HttpConnector, hyper::Body>;
 
 static OCTET_STREAM: &'static [u8] = b"application/octet-stream";
 
+// The TypeScript implementation ran into a couple of issues with http2:
+// * Some servers limit the number of open requests on a single connection.
+// * Some servers have a secret limit to the total number of requests that can
+//   be sent over a connection.
+//
+// Neither of these cases need explicity handling by `Client` because
+// `hyper::Client` supports:
+//
+// > Automatic request retries when a pooled connection is closed by the server
+// > before any bytes have been written.
+//
+// (according to <https://docs.rs/hyper/0.12.23/hyper/client/index.html>).
+
 #[derive(Clone, Debug)]
 pub struct Client {
     address: ilp::Address,
