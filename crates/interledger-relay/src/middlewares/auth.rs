@@ -23,7 +23,10 @@ where
         Error = hyper::Error,
     >,
 {
-    pub fn new(tokens: Vec<AuthToken>, next: S) -> Self {
+    pub fn new<I>(tokens: I, next: S) -> Self
+    where
+        I: IntoIterator<Item = AuthToken>,
+    {
         AuthTokenFilter {
             tokens: Arc::new({
                 tokens
@@ -84,6 +87,7 @@ impl AuthToken {
     }
 
     pub fn try_from(bytes: Bytes) -> Result<Self, http::Error> {
+        // Verify that the `AuthToken` can be used an an HTTP header value.
         http::header::HeaderValue::from_shared(bytes.clone())?;
         Ok(AuthToken(bytes))
     }

@@ -5,7 +5,7 @@ pub fn deserialize_uri<'de, D>(deserializer: D) -> Result<Uri, D::Error>
 where
     D: Deserializer<'de>,
 {
-    String::deserialize(deserializer)?
+    <&str>::deserialize(deserializer)?
         .parse::<Uri>()
         .map_err(de::Error::custom)
 }
@@ -15,7 +15,7 @@ mod tests {
     use serde::Deserialize;
 
     use crate::AuthToken;
-    use crate::app::{Config, ConnectorRoot};
+    use crate::app::{Config, ConnectorRoot, PeerConfig};
     use crate::testing::ROUTES;
     use super::*;
 
@@ -46,7 +46,15 @@ mod tests {
           , "asset_scale": 9
           , "asset_code": "XRP"
           }
-        , "auth_tokens": ["secret"]
+        , "peers":
+          [ { "type": "Child"
+            , "auth": ["child_secret"]
+            , "suffix": "child"
+            }
+          , { "type": "Parent"
+            , "auth": ["parent_secret"]
+            }
+          ]
         , "routes":
           [ { "target_prefix": "test.alice."
             , "next_hop":
@@ -74,7 +82,15 @@ mod tests {
                     asset_scale: 9,
                     asset_code: "XRP".to_owned(),
                 },
-                auth_tokens: vec![AuthToken::new("secret")],
+                peers: vec![
+                    PeerConfig::Child {
+                        auth: vec![AuthToken::new("child_secret")],
+                        suffix: "child".to_owned(),
+                    },
+                    PeerConfig::Parent {
+                        auth: vec![AuthToken::new("parent_secret")],
+                    },
+                ],
                 routes: ROUTES[0..=1].to_vec(),
             },
         );

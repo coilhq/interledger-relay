@@ -33,35 +33,42 @@ The executable can be found at `target/release/ilprelay`.
 RUST_LOG='info' \
 RELAY_BIND='127.0.0.1:3001' \
 RELAY_CONFIG='{
-	"root": {
-		"type": "Static",
-		"address": "private.moneyd",
-		"asset_scale": 9,
-		"asset_code": "XRP"
-	},
-	"auth_tokens": [
-		"relay_secret_1",
-		"relay_secret_2"
-	],
-	"routes": [
-		{
-			"target_prefix": "private.moneyd.3000.",
-			"next_hop": {
-				"type": "Bilateral",
-				"endpoint": "http://127.0.0.1:3000",
-				"auth": "secret_bilateral"
-			}
-		},
-		{
-			"target_prefix": "private.moneyd.",
-			"next_hop": {
-				"type": "Multilateral",
-				"endpoint_prefix": "http://127.0.0.1:",
-				"endpoint_suffix": "",
-				"auth": "secret_multilateral"
-			}
-		}
-	]
+  "root": {
+    "type": "Static",
+    "address": "private.moneyd",
+    "asset_scale": 9,
+    "asset_code": "XRP"
+  },
+  "peers": [
+    {
+      "type": "Child",
+      "auth": ["child_1_secret"],
+      "suffix": "child1"
+    },
+    {
+      "type": "Parent",
+      "auth": ["parent_secret"]
+    }
+  ],
+  "routes": [
+    {
+      "target_prefix": "private.moneyd.child1.",
+      "next_hop": {
+        "type": "Bilateral",
+        "endpoint": "http://127.0.0.1:3000",
+        "auth": "secret_bilateral"
+      }
+    },
+    {
+      "target_prefix": "private.moneyd.",
+      "next_hop": {
+        "type": "Multilateral",
+        "endpoint_prefix": "http://127.0.0.1:",
+        "endpoint_suffix": "",
+        "auth": "secret_multilateral"
+      }
+    }
+  ]
 }' ilprelay
 ```
 

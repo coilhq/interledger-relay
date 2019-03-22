@@ -42,8 +42,8 @@ fn main() {
         .and_then(move |connector| {
             info!("listening at: addr={}", bind_addr);
             hyper::Server::bind(&bind_addr)
-                // NOTE: this never actually returns an error (which is also why
-                // the closure needs a semi-explicit return type>
+                // This never actually returns an error, so the closure needs a
+                // semi-explicit return type.
                 .serve(move || -> Result<_, hyper::Error> {
                     Ok(connector.clone())
                 })

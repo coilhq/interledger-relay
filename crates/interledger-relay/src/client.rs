@@ -70,17 +70,15 @@ impl Client {
         if status == StatusCode::OK {
             Either::A(res.into_body()
                 .concat2()
-                .then(move |body| {
-                    match body {
-                        Ok(body) => {
-                            let body = BytesMut::from(Bytes::from(body));
-                            self.decode_response(uri, body).into_future()
-                        },
-                        Err(_error) => err(self.make_reject(
-                            ilp::ErrorCode::T00_INTERNAL_ERROR,
-                            b"invalid response body from peer",
-                        )),
-                    }
+                .then(move |body| match body {
+                    Ok(body) => {
+                        let body = BytesMut::from(Bytes::from(body));
+                        self.decode_response(uri, body).into_future()
+                    },
+                    Err(_error) => err(self.make_reject(
+                        ilp::ErrorCode::T00_INTERNAL_ERROR,
+                        b"invalid response body from peer",
+                    )),
                 }))
         } else if status.is_client_error() {
             warn!("remote client error: uri=\"{}\" status={:?}", uri, status);
@@ -264,13 +262,13 @@ mod tests {
     }
 
     macro_rules! make_test_incoming_error_code {
-        (
+        ($(
             fn $fn:ident(
                 status_code: $status_code:expr,
                 error_code: $error_code:expr,
                 error_message: $error_message:expr $(,)?
             );
-        ) => {
+        )+) => {$(
             #[test]
             fn $fn() {
                 let expect_reject = ilp::RejectBuilder {
@@ -295,7 +293,7 @@ mod tests {
                             })
                     });
             }
-        };
+        )*};
     }
 
     make_test_incoming_error_code! {
@@ -304,17 +302,13 @@ mod tests {
             error_code: ilp::ErrorCode::T00_INTERNAL_ERROR,
             error_message: b"unexpected response code from peer",
         );
-    }
 
-    make_test_incoming_error_code! {
         fn test_incoming_400(
             status_code: 400,
             error_code: ilp::ErrorCode::F00_BAD_REQUEST,
             error_message: b"bad request to peer",
         );
-    }
 
-    make_test_incoming_error_code! {
         fn test_incoming_500(
             status_code: 500,
             error_code: ilp::ErrorCode::T01_PEER_UNREACHABLE,

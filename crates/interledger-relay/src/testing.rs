@@ -24,7 +24,7 @@ pub static ADDRESS: ilp::Addr<'static> = unsafe {
 lazy_static! {
     pub static ref PREPARE: ilp::Prepare = ilp::PrepareBuilder {
         amount: 123,
-        expires_at: round_time(SystemTime::now() + EXPIRES_IN),
+        expires_at: truncate_nanos(SystemTime::now() + EXPIRES_IN),
         execution_condition: b"\
             \x11\x7b\x43\x4f\x1a\x54\xe9\x04\x4f\x4f\x54\x92\x3b\x2c\xff\x9e\
             \x4a\x6d\x42\x0a\xe2\x81\xd5\x02\x5d\x7b\xb0\x40\xc4\xb4\xc0\x4a\
@@ -35,7 +35,7 @@ lazy_static! {
 
     pub static ref PREPARE_MULTILATERAL: ilp::Prepare = ilp::PrepareBuilder {
         amount: 123,
-        expires_at: round_time(SystemTime::now() + EXPIRES_IN),
+        expires_at: truncate_nanos(SystemTime::now() + EXPIRES_IN),
         execution_condition: b"\
             \x11\x7b\x43\x4f\x1a\x54\xe9\x04\x4f\x4f\x54\x92\x3b\x2c\xff\x9e\
             \x4a\x6d\x42\x0a\xe2\x81\xd5\x02\x5d\x7b\xb0\x40\xc4\xb4\xc0\x4a\
@@ -85,45 +85,58 @@ lazy_static! {
     ];
 }
 
-fn round_time(mut time: SystemTime) -> SystemTime {
+fn truncate_nanos(time: SystemTime) -> SystemTime {
     let since_epoch = time
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap();
-    time -= Duration::from_nanos(since_epoch.subsec_nanos() as u64);
-    time
+    let nanos = since_epoch.subsec_nanos();
+    time - Duration::from_nanos(nanos.into())
 }
 
 pub type IlpResult = Result<ilp::Fulfill, ilp::Reject>;
 
 #[derive(Clone, Debug)]
-pub struct MockService {
-    prepares: Arc<RwLock<Vec<ilp::Prepare>>>,
+pub struct MockService<Req> {
+    requests: Arc<RwLock<Vec<Req>>>,
     response: Arc<IlpResult>,
 }
 
-impl MockService {
+impl<Req> MockService<Req>
+where
+    Req: Request + Clone,
+{
     pub fn new(response: IlpResult) -> Self {
         MockService {
-            prepares: Arc::new(RwLock::new(Vec::new())),
+            requests: Default::default(),
             response: Arc::new(response),
         }
     }
 
-    pub fn prepares(&self) -> Vec<ilp::Prepare> {
-        self.prepares.read()
+    pub fn requests(&self) -> impl Iterator<Item = Req> {
+        self.requests
+            .read()
             .unwrap()
             .clone()
+            .into_iter()
+    }
+
+    pub fn prepares(&self) -> impl Iterator<Item = ilp::Prepare> {
+        self.requests()
+            .map(|request| request.borrow().clone())
     }
 }
 
-impl<Req: Request> Service<Req> for MockService {
+impl<Req> Service<Req> for MockService<Req>
+where
+    Req: Request + Clone,
+{
     type Future = FutureResult<ilp::Fulfill, ilp::Reject>;
 
     fn call(self, request: Req) -> Self::Future {
-        self.prepares
+        self.requests
             .write()
             .unwrap()
-            .push(request.into());
+            .push(request);
         self.response.as_ref().clone().into()
     }
 }

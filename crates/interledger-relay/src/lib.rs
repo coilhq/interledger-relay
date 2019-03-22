@@ -30,6 +30,12 @@ pub trait Service<Req: Request>: Clone {
 pub trait Request: Into<ilp::Prepare> + Borrow<ilp::Prepare> {}
 impl Request for ilp::Prepare {}
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PeerRelation {
+    Child,
+    Parent,
+}
+
 /// Allow closures as services when testing.
 #[cfg(test)]
 impl<F, Req, Res> Service<Req> for F

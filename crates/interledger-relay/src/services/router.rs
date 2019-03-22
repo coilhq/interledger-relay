@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use bytes::Bytes;
 use futures::future::{Either, err};
 use futures::prelude::*;
-use log::warn;
+use log::{debug, warn};
 
 use crate::{Service, Request};
 use crate::client::Client;
@@ -61,7 +61,7 @@ impl RouterService {
         let route = match routes.resolve(prepare.destination()) {
             Some(route) => route,
             None => {
-                warn!(
+                debug!(
                     "no route found: destination=\"{}\"",
                     prepare.destination(),
                 );
@@ -78,10 +78,13 @@ impl RouterService {
         );
         let next_hop = match next_hop {
             Ok(uri) => uri,
-            Err(_error) => return Either::B(err(self.make_reject(
-                ilp::ErrorCode::F02_UNREACHABLE,
-                b"invalid address segment",
-            ))),
+            Err(error) => {
+                warn!("error generating endpoint: error={}", error);
+                return Either::B(err(self.make_reject(
+                    ilp::ErrorCode::F02_UNREACHABLE,
+                    b"invalid address segment",
+                )))
+            },
         };
 
         let mut builder = hyper::Request::builder();

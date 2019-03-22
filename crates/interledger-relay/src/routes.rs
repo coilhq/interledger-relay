@@ -1,3 +1,6 @@
+use std::error;
+use std::fmt;
+
 use bytes::{BufMut, Bytes, BytesMut};
 use http::HttpTryFrom;
 use http::uri::InvalidUriBytes;
@@ -8,7 +11,7 @@ use crate::AuthToken;
 use crate::serde::deserialize_uri;
 
 // TODO validate target prefixes
-// TODO lint route order (i.e. check for unreachable)
+// TODO lint route order: check for unreachable; verify trailing "."
 
 /// A simple static routing table.
 #[derive(Debug, PartialEq)]
@@ -124,6 +127,17 @@ pub struct RouterError(ErrorKind);
 enum ErrorKind {
     InvalidDestination,
     InvalidUriBytes(InvalidUriBytes),
+}
+
+impl error::Error for RouterError {}
+
+impl fmt::Display for RouterError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self.0 {
+            ErrorKind::InvalidDestination => "InvalidDestination",
+            ErrorKind::InvalidUriBytes { .. } => "InvalidUriBytes",
+        })
+    }
 }
 
 impl From<InvalidUriBytes> for RouterError {

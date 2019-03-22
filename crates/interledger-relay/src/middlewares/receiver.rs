@@ -81,13 +81,28 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RequestWithHeaders {
     prepare: ilp::Prepare,
     headers: hyper::HeaderMap,
 }
 
 impl Request for RequestWithHeaders {}
+
+impl RequestWithHeaders {
+    #[cfg(test)]
+    pub fn new(prepare: ilp::Prepare, headers: hyper::HeaderMap) -> Self {
+        RequestWithHeaders { prepare, headers }
+    }
+
+    pub fn header<K>(&self, header_name: K) -> Option<&[u8]>
+    where
+        K: hyper::header::AsHeaderName,
+    {
+        self.headers.get(header_name)
+            .map(|header| header.as_ref())
+    }
+}
 
 impl Into<ilp::Prepare> for RequestWithHeaders {
     fn into(self) -> ilp::Prepare {
@@ -166,7 +181,7 @@ mod test_receiver {
 
         let next = service.next.clone();
         assert_eq!(
-            next.prepares(),
+            next.prepares().collect::<Vec<_>>(),
             vec![PREPARE.clone()],
         );
 
