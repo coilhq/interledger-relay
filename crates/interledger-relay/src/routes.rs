@@ -129,13 +129,20 @@ enum ErrorKind {
     InvalidUriBytes(InvalidUriBytes),
 }
 
-impl error::Error for RouterError {}
+impl error::Error for RouterError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match &self.0 {
+            ErrorKind::InvalidDestination => None,
+            ErrorKind::InvalidUriBytes(inner) => Some(inner),
+        }
+    }
+}
 
 impl fmt::Display for RouterError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self.0 {
             ErrorKind::InvalidDestination => "InvalidDestination",
-            ErrorKind::InvalidUriBytes { .. } => "InvalidUriBytes",
+            ErrorKind::InvalidUriBytes(_) => "InvalidUriBytes",
         })
     }
 }
