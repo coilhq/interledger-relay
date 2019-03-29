@@ -222,7 +222,7 @@ mod test_connector_peer {
             address: ilp::Address::new(b"test.relay"),
             auth: TOKENS
                 .iter()
-                .map(Clone::clone)
+                .cloned()
                 .map(AuthToken::new)
                 .collect::<HashSet<_>>(),
         };

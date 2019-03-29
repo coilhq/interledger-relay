@@ -15,8 +15,9 @@ pub use self::client::Client;
 pub use self::middlewares::AuthToken;
 pub use self::routes::{NextHop, Route};
 
-// TODO Limit max ilp packet (or http body) length
+// TODO Limit max ilp packet (or http body) length (both requests and responses)
 // TODO maybe support ping protocol
+// TODO support auth header "Bearer: " prefix
 
 pub trait Service<Req: Request>: Clone {
     type Future: 'static + Send + Future<

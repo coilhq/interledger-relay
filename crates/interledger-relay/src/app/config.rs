@@ -123,7 +123,7 @@ impl PeerConfig {
             auth: self
                 .auth_tokens()
                 .iter()
-                .map(Clone::clone)
+                .cloned()
                 .collect::<HashSet<_>>(),
         })
     }

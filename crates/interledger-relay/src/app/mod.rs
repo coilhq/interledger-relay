@@ -8,7 +8,7 @@ use serde::Deserialize;
 pub use self::config::{ConnectorRoot, PeerConfig, SetupError};
 use crate::{Client, Route};
 use crate::middlewares::{AuthTokenFilter, HealthCheckFilter, MethodFilter, Receiver};
-use crate::services::{ConfigService, ExpiryService, FromPeerService, RouterService};
+use crate::services::{ConfigService, EchoService, ExpiryService, FromPeerService, RouterService};
 
 /// The maximum duration that the outgoing HTTP client will wait for a response,
 /// even if the Prepare's expiry is longer.
@@ -27,9 +27,9 @@ pub type Connector =
     HealthCheckFilter<MethodFilter<AuthTokenFilter<
         Receiver<
             // ILP Services:
-            ExpiryService<FromPeerService<ConfigService<
+            ExpiryService<FromPeerService<ConfigService<EchoService<
                 RouterService,
-            >>>,
+            >>>>,
         >,
     >>>;
 
@@ -40,7 +40,7 @@ impl Config {
             let auth_tokens = self.peers
                 .iter()
                 .flat_map(|peer| peer.auth_tokens().iter())
-                .map(Clone::clone);
+                .cloned();
             let peers = self.peers
                 .iter()
                 .map(|peer| {
@@ -50,7 +50,8 @@ impl Config {
 
             let client = Client::new(address.clone());
             let router_svc = RouterService::new(client, self.routes);
-            let ildcp_svc = ConfigService::new(ildcp, router_svc);
+            let echo_svc = EchoService::new(address.clone(), router_svc);
+            let ildcp_svc = ConfigService::new(ildcp, echo_svc);
             let from_peer_svc =
                 FromPeerService::new(address.clone(), peers, ildcp_svc);
             let expiry_svc =
