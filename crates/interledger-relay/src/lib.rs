@@ -1,5 +1,6 @@
 pub mod app;
 mod client;
+mod combinators;
 mod middlewares;
 mod routes;
 mod serde;
@@ -15,7 +16,6 @@ pub use self::client::Client;
 pub use self::middlewares::AuthToken;
 pub use self::routes::{NextHop, Route};
 
-// TODO Limit max ilp packet (or http body) length (both requests and responses)
 // TODO maybe support ping protocol
 // TODO support auth header "Bearer: " prefix
 

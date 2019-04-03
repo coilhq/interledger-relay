@@ -97,7 +97,6 @@ mod test_config {
                 asset_code: "XRP".to_owned(),
             },
             peers: PEERS.clone(),
-            //auth_tokens: vec![AuthToken::new("secret")],
             routes: testing::ROUTES.clone(),
         };
 
@@ -189,7 +188,6 @@ mod test_config {
                 asset_scale: 9,
                 asset_code: "XRP".to_owned(),
             },
-            //auth_tokens: vec![AuthToken::new("secret")],
             peers: PEERS.clone(),
             routes: testing::ROUTES.clone(),
         }.start();

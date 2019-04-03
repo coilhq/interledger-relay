@@ -140,7 +140,6 @@ mod test_from_peer_service {
     use super::*;
 
     lazy_static! {
-        //static ref SERVICE: FromPeerService<
         static ref PEERS: Vec<ConnectorPeer> = vec![
             ConnectorPeer {
                 relation: PeerRelation::Child,

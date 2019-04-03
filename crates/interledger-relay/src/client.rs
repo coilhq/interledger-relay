@@ -7,14 +7,27 @@ use http::request::Builder as RequestBuilder;
 use hyper::{Response, StatusCode};
 use log::warn;
 
+use crate::combinators::LimitStream;
+
 type HyperClient = hyper::Client<hyper::client::HttpConnector, hyper::Body>;
+
+// Use the size of a Reject, since they can be larger than Fulfills.
+const MAX_RESPONSE_SIZE: usize = {
+    const ENVELOPE: usize = 1 + 8;
+    const CODE: usize = 3;
+    const TRIGGERED_BY: usize = 8 + 1024;
+    const MESSAGE: usize = 8 + (1 << 13);
+    const DATA: usize = 8 + (1 << 15);
+    ENVELOPE + CODE + TRIGGERED_BY + MESSAGE + DATA
+};
 
 static OCTET_STREAM: &'static [u8] = b"application/octet-stream";
 
 // The TypeScript implementation ran into a couple of issues with http2:
-// * Some servers limit the number of open requests on a single connection.
-// * Some servers have a secret limit to the total number of requests that can
-//   be sent over a connection.
+//
+//   * Some servers limit the number of open requests on a single connection.
+//   * Some servers have a secret limit to the total number of requests that can
+//     be sent over a connection.
 //
 // Neither of these cases need explicity handling by `Client` because
 // `hyper::Client` supports:
@@ -22,7 +35,7 @@ static OCTET_STREAM: &'static [u8] = b"application/octet-stream";
 // > Automatic request retries when a pooled connection is closed by the server
 // > before any bytes have been written.
 //
-// (according to <https://docs.rs/hyper/0.12.23/hyper/client/index.html>).
+// (source: <https://docs.rs/hyper/0.12.23/hyper/client/index.html>).
 
 #[derive(Clone, Debug)]
 pub struct Client {
@@ -81,17 +94,24 @@ impl Client {
     {
         let status = res.status();
         if status == StatusCode::OK {
-            Either::A(res.into_body()
+            let res_body = LimitStream::new(MAX_RESPONSE_SIZE, res.into_body());
+            Either::A(res_body
                 .concat2()
                 .then(move |body| match body {
                     Ok(body) => {
                         let body = BytesMut::from(Bytes::from(body));
                         self.decode_response(uri, body).into_future()
                     },
-                    Err(_error) => err(self.make_reject(
-                        ilp::ErrorCode::T00_INTERNAL_ERROR,
-                        b"invalid response body from peer",
-                    )),
+                    Err(error) => {
+                        warn!(
+                            "remote response body error: uri=\"{}\" error={:?}",
+                            uri, error,
+                        );
+                        err(self.make_reject(
+                            ilp::ErrorCode::T00_INTERNAL_ERROR,
+                            b"invalid response body from peer",
+                        ))
+                    },
                 }))
         } else if status.is_client_error() {
             warn!("remote client error: uri=\"{}\" status={:?}", uri, status);

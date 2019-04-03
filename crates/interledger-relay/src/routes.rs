@@ -44,6 +44,8 @@ pub struct Route {
     next_hop: NextHop,
 }
 
+/// Explanation of multilateral mode:
+/// <https://forum.interledger.org/t/describe-multilateral-mode-in-ilp-plugin-http/456/2>
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type")]
 pub enum NextHop {

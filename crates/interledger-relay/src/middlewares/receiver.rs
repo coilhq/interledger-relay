@@ -1,15 +1,25 @@
 use std::borrow::Borrow;
 
 use bytes::{Bytes, BytesMut};
-use futures::future::{Either, ok};
+use futures::future::{Either, err, ok};
 use futures::prelude::*;
 use hyper::StatusCode;
 use log::warn;
 
 use crate::{Request, Service};
+use crate::combinators::{LimitStream, LimitStreamError};
 use crate::services;
 
 static PEER_NAME: &'static str = "ILP-Peer-Name";
+
+const MAX_REQUEST_SIZE: usize = {
+    const ENVELOPE: usize = 1 + 8;
+    const FIXED_FIELDS: usize = 8 + 13 + 32;
+    const DESTINATION: usize = 8 + 1024;
+    // <https://github.com/interledger/rfcs/blob/master/asn1/InterledgerProtocol.asn>
+    const DATA: usize = 8 + (1 << 15);
+    ENVELOPE + FIXED_FIELDS + DESTINATION + DATA
+};
 
 #[derive(Clone, Debug)]
 pub struct Receiver<S> {
@@ -50,27 +60,36 @@ where
     {
         let next = self.next.clone();
         let (parts, body) = req.into_parts();
-        body
+        LimitStream::new(MAX_REQUEST_SIZE, body)
             .concat2()
-            .and_then(move |chunk| {
-                let buffer = Bytes::from(chunk);
-                // `BytesMut::from(chunk)` calls `try_mut`, and only copies the
-                // data if that fails (e.g. if the buffer is `KIND_STATIC`, which
-                // probably only happens in the tests).
-                let buffer = BytesMut::from(buffer);
-                match ilp::Prepare::try_from(buffer) {
-                    Ok(prepare) => Either::A({
+            .then(move |chunk_result| {
+                // The Result-in-a-Result is awkward, is there a better way?
+                let prepare_result = chunk_result.map(chunk_to_prepare);
+                match prepare_result {
+                    Ok(Ok(prepare)) => Either::A({
                         next
                             .call(RequestWithHeaders {
                                 prepare,
-                                headers: parts.headers
+                                headers: parts.headers,
                             })
                             .then(|res_packet| {
                                 Ok(make_http_response(res_packet))
                             })
                     }),
-                    Err(error) => Either::B(ok({
-                        warn!("error parsing incoming prepare: {}", error);
+                    Err(LimitStreamError::StreamError(error)) => {
+                        Either::B(err(error))
+                    },
+                    // The incoming request body was too large.
+                    Err(LimitStreamError::LimitExceeded) => Either::B(ok({
+                        warn!("incoming request body too large");
+                        hyper::Response::builder()
+                            .status(StatusCode::PAYLOAD_TOO_LARGE)
+                            .body(hyper::Body::from("Payload Too Large"))
+                            .expect("response builder error")
+                    })),
+                    // The packet could not be decoded.
+                    Ok(Err(error)) => Either::B(ok({
+                        warn!("error parsing incoming prepare: error={:?}", error);
                         hyper::Response::builder()
                             .status(StatusCode::BAD_REQUEST)
                             .body(hyper::Body::from("Error parsing ILP Prepare"))
@@ -79,6 +98,17 @@ where
                 }
             })
     }
+}
+
+fn chunk_to_prepare(chunk: hyper::Chunk)
+    -> Result<ilp::Prepare, ilp::ParseError>
+{
+    let buffer = Bytes::from(chunk);
+    // `BytesMut::from(chunk)` calls `try_mut`, and only copies the
+    // data if that fails (e.g. if the buffer is `KIND_STATIC`, which
+    // probably only happens in the tests).
+    let buffer = BytesMut::from(buffer);
+    ilp::Prepare::try_from(buffer)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -142,6 +172,8 @@ fn make_http_response(packet: Result<ilp::Fulfill, ilp::Reject>)
 
 #[cfg(test)]
 mod test_receiver {
+    use bytes::BufMut;
+
     use crate::services::RequestWithPeerName;
     use crate::testing::{IlpResult, MockService, PanicService};
     use crate::testing::{PREPARE, FULFILL, REJECT};
@@ -237,5 +269,32 @@ mod test_receiver {
             .unwrap();
         let response = service.handle(request).wait().unwrap();
         assert_eq!(response.status(), 200);
+    }
+
+    #[test]
+    fn test_body_too_large() {
+        let prepare = ilp::PrepareBuilder {
+            amount: 123,
+            expires_at: PREPARE.expires_at(),
+            execution_condition: &[0; 32],
+            destination: PREPARE.destination(),
+            data: &{
+                let mut data = BytesMut::with_capacity(MAX_REQUEST_SIZE);
+                for _i in 0..MAX_REQUEST_SIZE {
+                    data.put(b'.');
+                }
+                data
+            },
+        }.build();
+
+        let service = Receiver::new(PanicService);
+        let request = hyper::Request::post(URI)
+            .header("ILP-Peer-Name", "alice")
+            .body(hyper::Body::from({
+                Bytes::from(BytesMut::from(prepare))
+            }))
+            .unwrap();
+        let response = service.handle(request).wait().unwrap();
+        assert_eq!(response.status(), 413);
     }
 }

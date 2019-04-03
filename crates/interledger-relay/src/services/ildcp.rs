@@ -145,7 +145,6 @@ mod test_config_service {
 
     #[test]
     fn test_passthrough() {
-        //let request = TestRequest(PREPARE.clone(), None);
         assert_eq!(
             CONFIG
                 .clone()
@@ -163,8 +162,6 @@ mod test_config_service {
             request.peer_name = None;
             request
         };
-        //let prepare = ilp::Prepare::from(ildcp::Request::new());
-        //let request = TestRequest(prepare, None);
         assert_eq!(
             CONFIG
                 .clone()
@@ -196,8 +193,6 @@ mod test_config_service {
 
     #[test]
     fn test_ildcp_response() {
-        //let prepare = ilp::Prepare::from(ildcp::Request::new());
-        //let request = TestRequest(prepare, Some(b"bob"));
         let fulfill = CONFIG
             .clone()
             .call(REQUEST_ILDCP.clone())
