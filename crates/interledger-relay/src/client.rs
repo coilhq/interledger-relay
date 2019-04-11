@@ -5,11 +5,13 @@ use futures::future::{Either, err};
 use futures::prelude::*;
 use http::request::Builder as RequestBuilder;
 use hyper::{Response, StatusCode};
+use hyper::client::HttpConnector;
+use hyper_tls::HttpsConnector;
 use log::warn;
 
 use crate::combinators::LimitStream;
 
-type HyperClient = hyper::Client<hyper::client::HttpConnector, hyper::Body>;
+type HyperClient = hyper::Client<HttpsConnector<HttpConnector>, hyper::Body>;
 
 // Use the size of a Reject, since they can be larger than Fulfills.
 const MAX_RESPONSE_SIZE: usize = {
@@ -45,7 +47,10 @@ pub struct Client {
 
 impl Client {
     pub fn new(address: ilp::Address) -> Self {
-        Client::new_with_client(address, HyperClient::new())
+        let agent = hyper_tls::HttpsConnector::new(4)
+            .expect("TLS initialization failed");
+        let client = hyper::Client::builder().build(agent);
+        Client::new_with_client(address, client)
     }
 
     pub fn new_with_client(address: ilp::Address, hyper: HyperClient) -> Self {
@@ -178,7 +183,7 @@ mod tests {
             ADDRESS.to_address(),
             hyper::Client::builder()
                 .http2_only(true)
-                .build_http(),
+                .build(hyper_tls::HttpsConnector::new(4).unwrap()),
         );
     }
 
