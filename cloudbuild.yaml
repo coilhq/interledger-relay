@@ -1,10 +1,11 @@
 steps:
-- name: 'rust:1.33-slim'
+- name: 'gcr.io/cloud-builders/docker'
   id: Test
-  entrypoint: /bin/sh
   args:
-  - -c
-  - 'cargo test'
+  - 'build'
+  - '--file'
+  - 'Dockerfile.test'
+  - '.'
 
 - name: 'gcr.io/cloud-builders/docker'
   id: Build
@@ -13,6 +14,6 @@ steps:
   - '-t'
   - 'gcr.io/$PROJECT_ID/$REPO_NAME:$SHORT_SHA'
   - '.'
- 
+
 images: ['gcr.io/$PROJECT_ID/$REPO_NAME:$SHORT_SHA']
 timeout: 720s
