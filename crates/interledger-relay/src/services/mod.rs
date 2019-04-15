@@ -5,7 +5,7 @@ mod from_peer;
 mod ildcp;
 mod router;
 
-pub use self::debug::DebugService;
+pub use self::debug::{DebugService, DebugServiceOptions};
 pub use self::echo::EchoService;
 pub use self::expiry::ExpiryService;
 pub use self::from_peer::{ConnectorPeer, FromPeerService, RequestFromPeer, RequestWithFrom};

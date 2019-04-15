@@ -14,7 +14,7 @@ where
 mod tests {
     use serde::Deserialize;
 
-    use crate::AuthToken;
+    use crate::{AuthToken, DebugServiceOptions};
     use crate::app::{Config, ConnectorRoot, PeerConfig};
     use crate::testing::ROUTES;
     use super::*;
@@ -72,6 +72,11 @@ mod tests {
               }
             }
           ]
+        , "debug_service":
+            { "log_prepare": false
+            , "log_fulfill": false
+            , "log_reject": true
+            }
         }"#).expect("valid json");
 
         assert_eq!(
@@ -92,6 +97,11 @@ mod tests {
                     },
                 ],
                 routes: ROUTES[0..=1].to_vec(),
+                debug_service: DebugServiceOptions {
+                    log_prepare: false,
+                    log_fulfill: false,
+                    log_reject: true,
+                },
             },
         );
     }

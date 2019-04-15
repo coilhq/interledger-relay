@@ -1,5 +1,6 @@
 use futures::prelude::*;
 use log::debug;
+use serde::Deserialize;
 
 use crate::{Request, Service};
 
@@ -7,14 +8,25 @@ use crate::{Request, Service};
 #[derive(Clone, Debug)]
 pub struct DebugService<S> {
     prefix: &'static str,
+    options: DebugServiceOptions,
     next: S,
 }
 
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct DebugServiceOptions {
+    pub log_prepare: bool,
+    pub log_fulfill: bool,
+    pub log_reject: bool,
+}
+
 impl<S> DebugService<S> {
-    #[allow(dead_code)]
     #[inline]
-    pub fn new(prefix: &'static str, next: S) -> Self {
-        DebugService { prefix, next }
+    pub fn new(
+        prefix: &'static str,
+        options: DebugServiceOptions,
+        next: S,
+    ) -> Self {
+        DebugService { prefix, options, next }
     }
 }
 
@@ -31,16 +43,33 @@ where
     >;
 
     fn call(self, request: Req) -> Self::Future {
-        debug!("{}: {:?}", self.prefix, request.borrow().clone());
+        let prefix = self.prefix.clone();
+        let options = self.options.clone();
+        if options.log_prepare {
+            debug!("{}: {:?}", prefix, request.borrow());
+        }
 
-        let prefix = self.prefix;
         Box::new(self.next.call(request)
             .then(move |response| {
                 match &response {
-                    Ok(fulfill) => debug!("{}: {:?}", prefix, fulfill),
-                    Err(reject) => debug!("{}: {:?}", prefix, reject),
+                    Ok(fulfill) => if options.log_fulfill {
+                        debug!("{}: {:?}", prefix, fulfill)
+                    },
+                    Err(reject) => if options.log_reject {
+                        debug!("{}: {:?}", prefix, reject)
+                    },
                 }
                 response
             }))
+    }
+}
+
+impl Default for DebugServiceOptions {
+    fn default() -> Self {
+        DebugServiceOptions {
+            log_prepare: false,
+            log_fulfill: false,
+            log_reject: false,
+        }
     }
 }

@@ -15,6 +15,7 @@ use futures::prelude::*;
 pub use self::client::Client;
 pub use self::middlewares::AuthToken;
 pub use self::routes::{NextHop, Route};
+pub use self::services::DebugServiceOptions;
 
 // TODO maybe support ping protocol
 // TODO support auth header "Bearer: " prefix

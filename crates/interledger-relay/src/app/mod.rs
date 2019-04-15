@@ -8,7 +8,8 @@ use serde::Deserialize;
 pub use self::config::{ConnectorRoot, PeerConfig, SetupError};
 use crate::{Client, Route};
 use crate::middlewares::{AuthTokenFilter, HealthCheckFilter, MethodFilter, Receiver};
-use crate::services::{ConfigService, EchoService, ExpiryService, FromPeerService, RouterService};
+use crate::services::{ConfigService, DebugService, DebugServiceOptions, EchoService};
+use crate::services::{ExpiryService, FromPeerService, RouterService};
 
 /// The maximum duration that the outgoing HTTP client will wait for a response,
 /// even if the Prepare's expiry is longer.
@@ -19,6 +20,8 @@ pub struct Config {
     pub root: ConnectorRoot,
     pub peers: Vec<PeerConfig>,
     pub routes: Vec<Route>,
+    #[serde(default)]
+    pub debug_service: DebugServiceOptions,
 }
 
 // TODO This should be an existential type once they are stable.
@@ -27,9 +30,9 @@ pub type Connector =
     HealthCheckFilter<MethodFilter<AuthTokenFilter<
         Receiver<
             // ILP Services:
-            ExpiryService<FromPeerService<ConfigService<EchoService<
+            DebugService<ExpiryService<FromPeerService<ConfigService<EchoService<
                 RouterService,
-            >>>>,
+            >>>>>,
         >,
     >>>;
 
@@ -56,8 +59,10 @@ impl Config {
                 FromPeerService::new(address.clone(), peers, ildcp_svc);
             let expiry_svc =
                 ExpiryService::new(address, DEFAULT_MAX_TIMEOUT, from_peer_svc);
+            let debug_svc =
+                DebugService::new("packet", self.debug_service, expiry_svc);
 
-            let receiver = Receiver::new(expiry_svc);
+            let receiver = Receiver::new(debug_svc);
             let auth_filter = AuthTokenFilter::new(auth_tokens, receiver);
             let method_filter = MethodFilter::new(hyper::Method::POST, auth_filter);
             Ok(HealthCheckFilter::new(method_filter))
@@ -98,6 +103,7 @@ mod test_config {
             },
             peers: PEERS.clone(),
             routes: testing::ROUTES.clone(),
+            debug_service: DebugServiceOptions::default(),
         };
 
         let future = connector
@@ -190,6 +196,7 @@ mod test_config {
             },
             peers: PEERS.clone(),
             routes: testing::ROUTES.clone(),
+            debug_service: DebugServiceOptions::default(),
         }.start();
 
         let request = hyper::Client::new()
