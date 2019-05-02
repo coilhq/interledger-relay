@@ -68,7 +68,12 @@ RELAY_CONFIG='{
         "auth": "secret_multilateral"
       }
     }
-  ]
+  ],
+  "debug_service": {
+    "log_prepare": false,
+    "log_fulfill": false,
+    "log_reject": true
+  }
 }' ilprelay
 ```
 
