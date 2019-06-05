@@ -30,7 +30,7 @@ impl<S> ExpiryService<S> {
         ilp::RejectBuilder {
             code,
             message,
-            triggered_by: self.address.as_addr(),
+            triggered_by: Some(self.address.as_addr()),
             data: &[],
         }.build()
     }

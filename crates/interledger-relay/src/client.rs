@@ -159,7 +159,7 @@ impl Client {
         ilp::RejectBuilder {
             code,
             message,
-            triggered_by: self.address.as_addr(),
+            triggered_by: Some(self.address.as_addr()),
             data: b"",
         }.build()
     }
@@ -279,7 +279,7 @@ mod tests {
         let expect_reject = ilp::RejectBuilder {
             code: ilp::ErrorCode::T00_INTERNAL_ERROR,
             message: b"invalid response body from peer",
-            triggered_by: ADDRESS,
+            triggered_by: Some(ADDRESS),
             data: b"",
         }.build();
         testing::MockServer::new()
@@ -312,7 +312,7 @@ mod tests {
                 let expect_reject = ilp::RejectBuilder {
                     code: $error_code,
                     message: $error_message,
-                    triggered_by: ADDRESS,
+                    triggered_by: Some(ADDRESS),
                     data: b"",
                 }.build();
                 testing::MockServer::new()
@@ -359,7 +359,7 @@ mod tests {
         let expect_reject = ilp::RejectBuilder {
             code: ilp::ErrorCode::T01_PEER_UNREACHABLE,
             message: b"peer connection error",
-            triggered_by: ADDRESS,
+            triggered_by: Some(ADDRESS),
             data: b"",
         }.build();
         testing::MockServer::new()

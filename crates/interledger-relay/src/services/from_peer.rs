@@ -64,7 +64,7 @@ where
                 return Either::B(err(ilp::RejectBuilder {
                     code: ilp::ErrorCode::F00_BAD_REQUEST,
                     message: b"could not determine packet source",
-                    triggered_by: self.address.as_addr(),
+                    triggered_by: Some(self.address.as_addr()),
                     data: &[],
                 }.build()))
             },

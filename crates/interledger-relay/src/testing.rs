@@ -55,7 +55,7 @@ lazy_static! {
     pub static ref REJECT: ilp::Reject = ilp::RejectBuilder {
         code: ilp::ErrorCode::F99_APPLICATION_ERROR,
         message: b"Some error",
-        triggered_by: ilp::Addr::new(b"example.connector"),
+        triggered_by: Some(ilp::Addr::new(b"example.connector")),
         data: b"reject data",
     }.build();
 

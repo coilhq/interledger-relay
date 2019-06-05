@@ -22,7 +22,7 @@ tokio = "0.1.15"
 package = "interledger-packet"
 features = ["serde"]
 git = "https://github.com/coilhq/interledger-rs"
-branch = "dj-connector-relay2"
+branch = "dj-connector-relay3"
 #path = "../../../ilp-rs/crates/interledger-packet"
 
 [dev-dependencies]

@@ -30,7 +30,7 @@ impl<S> ConfigService<S> {
         ilp::RejectBuilder {
             code,
             message,
-            triggered_by: self.config.client_address(),
+            triggered_by: Some(self.config.client_address()),
             data: &[],
         }.build()
     }

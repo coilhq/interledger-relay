@@ -104,7 +104,7 @@ impl RouterService {
         ilp::RejectBuilder {
             code,
             message,
-            triggered_by: self.data.address.as_addr(),
+            triggered_by: Some(self.data.address.as_addr()),
             data: b"",
         }.build()
     }
@@ -192,7 +192,7 @@ mod test_router_service {
         let expect_reject = ilp::RejectBuilder {
             code: ilp::ErrorCode::F02_UNREACHABLE,
             message: b"no route found",
-            triggered_by: ADDRESS,
+            triggered_by: Some(ADDRESS),
             data: b"",
         }.build();
         let router = RouterService::new(CLIENT.clone(), vec![ROUTES[1].clone()]);

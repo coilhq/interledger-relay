@@ -46,7 +46,7 @@ where
             Err(_) => return Either::A(err(ilp::RejectBuilder {
                 code: ilp::ErrorCode::F01_INVALID_PACKET,
                 message: b"invalid echo request",
-                triggered_by: self.address.as_addr(),
+                triggered_by: Some(self.address.as_addr()),
                 data: &[],
             }.build())),
         };
