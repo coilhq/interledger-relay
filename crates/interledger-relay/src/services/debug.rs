@@ -43,7 +43,7 @@ where
     >;
 
     fn call(self, request: Req) -> Self::Future {
-        let prefix = self.prefix.clone();
+        let prefix = self.prefix;
         let options = self.options.clone();
         if options.log_prepare {
             debug!("{}: {:?}", prefix, request.borrow());
