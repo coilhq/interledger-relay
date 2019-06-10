@@ -74,14 +74,14 @@ impl Client {
         let prepare_bytes = BytesMut::from(prepare).freeze();
         let req = req_builder
             .header(hyper::header::CONTENT_TYPE, OCTET_STREAM)
-            .body(hyper::Body::from(prepare_bytes))
+            .body(hyper::Body::from(prepare_bytes.clone()))
             .expect("build_prepare_request builder error");
         let uri = req.uri().clone();
 
         self.hyper
             .request(req)
             .then(move |res| match res {
-                Ok(res) => Either::A(self.decode_http_response(uri, res)),
+                Ok(res) => Either::A(self.decode_http_response(uri, res, prepare_bytes)),
                 Err(error) => {
                     warn!(
                         "outgoing connection error: uri=\"{:?}\" error=\"{}\"",
@@ -95,9 +95,12 @@ impl Client {
             })
     }
 
-    fn decode_http_response(self, uri: hyper::Uri, res: Response<hyper::Body>)
-        -> impl Future<Item = ilp::Fulfill, Error = ilp::Reject>
-    {
+    fn decode_http_response(
+        self,
+        uri: hyper::Uri,
+        res: Response<hyper::Body>,
+        prepare: Bytes,
+    ) -> impl Future<Item = ilp::Fulfill, Error = ilp::Reject> {
         let status = res.status();
         let res_body = LimitStream::new(MAX_RESPONSE_SIZE, res.into_body());
         // TODO timeout if response takes too long?
@@ -121,24 +124,34 @@ impl Client {
                 return Either::A(self.decode_response(uri, body).into_future());
             }
 
-            const TRUNCATE_BODY: usize = 128;
+            const TRUNCATE_BODY: usize = 64;
             let body_str = str::from_utf8(&body);
             let body_str = body_str.map(|s| truncate(s, TRUNCATE_BODY));
+            let prepare_str = base64::encode(&prepare);
 
             if status.is_client_error() {
-                warn!("remote client error: uri=\"{}\" status={:?} body={:?}", uri, status, body_str);
+                warn!(
+                    "remote client error: uri=\"{}\" status={:?} body={:?} prepare={:?}",
+                    uri, status, body_str, prepare_str,
+                );
                 Either::B(err(self.make_reject(
                     ilp::ErrorCode::F00_BAD_REQUEST,
                     b"bad request to peer",
                 )))
             } else if status.is_server_error() {
-                warn!("remote server error: uri=\"{}\" status={:?} body={:?}", uri, status, body_str);
+                warn!(
+                    "remote server error: uri=\"{}\" status={:?} body={:?} prepare={:?}",
+                    uri, status, body_str, prepare_str,
+                );
                 Either::B(err(self.make_reject(
                     ilp::ErrorCode::T01_PEER_UNREACHABLE,
                     b"peer internal error",
                 )))
             } else {
-                warn!("unexpected status code: uri=\"{}\" status={:?} body={:?}", uri, status, body_str);
+                warn!(
+                    "unexpected status code: uri=\"{}\" status={:?} body={:?} prepare={:?}",
+                    uri, status, body_str, prepare_str,
+                );
                 Either::B(err(self.make_reject(
                     ilp::ErrorCode::T00_INTERNAL_ERROR,
                     b"unexpected response code from peer",
