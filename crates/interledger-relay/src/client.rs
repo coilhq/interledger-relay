@@ -121,7 +121,10 @@ impl Client {
                 return Either::A(self.decode_response(uri, body).into_future());
             }
 
+            const TRUNCATE_BODY: usize = 128;
             let body_str = str::from_utf8(&body);
+            let body_str = body_str.map(|s| truncate(s, TRUNCATE_BODY));
+
             if status.is_client_error() {
                 warn!("remote client error: uri=\"{}\" status={:?} body={:?}", uri, status, body_str);
                 Either::B(err(self.make_reject(
@@ -167,6 +170,14 @@ impl Client {
             triggered_by: Some(self.address.as_addr()),
             data: b"",
         }.build()
+    }
+}
+
+fn truncate(string: &str, size: usize) -> &str {
+    if string.len() < size {
+        string
+    } else {
+        &string[0..size]
     }
 }
 
@@ -377,5 +388,19 @@ mod tests {
                         Ok(())
                     })
             });
+    }
+
+    #[test]
+    fn test_truncate() {
+        let tests = &[
+            (0, ""),
+            (1, "t"),
+            (4, "test"),
+            (8, "test 123"),
+            (9, "test 123"),
+        ];
+        for (size, result) in tests {
+            assert_eq!(truncate("test 123", *size), *result);
+        }
     }
 }

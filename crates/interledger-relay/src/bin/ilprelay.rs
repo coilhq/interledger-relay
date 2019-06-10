@@ -1,4 +1,5 @@
 use std::env;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::process;
 
@@ -10,7 +11,17 @@ use interledger_relay::app;
 // TODO filter path?
 
 fn main() {
-    env_logger::init();
+    env_logger::builder()
+        .format(|fmt, record| {
+            writeln!(
+                fmt, "{} {} {} {}",
+                fmt.precise_timestamp(),
+                record.target(),
+                record.level(),
+                record.args(),
+            )
+        })
+        .init();
 
     let bind_addr = env::var("RELAY_BIND")
         .unwrap_or_else(|_| {
