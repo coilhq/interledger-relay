@@ -2,9 +2,8 @@ use std::str;
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
-use futures::future::{Either, err};
+use futures::future::{Either, err, ok};
 use futures::prelude::*;
-use http::request::Builder as RequestBuilder;
 use hyper::{Response, StatusCode};
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
@@ -26,24 +25,36 @@ const MAX_RESPONSE_SIZE: usize = {
 
 static OCTET_STREAM: &'static [u8] = b"application/octet-stream";
 
-// The TypeScript implementation ran into a couple of issues with http2:
-//
-//   * Some servers limit the number of open requests on a single connection.
-//   * Some servers have a secret limit to the total number of requests that can
-//     be sent over a connection.
-//
-// Neither of these cases need explicity handling by `Client` because
-// `hyper::Client` supports:
-//
-// > Automatic request retries when a pooled connection is closed by the server
-// > before any bytes have been written.
-//
-// (source: <https://docs.rs/hyper/0.12.23/hyper/client/index.html>).
-
 #[derive(Clone, Debug)]
 pub struct Client {
     address: ilp::Address,
     hyper: Arc<HyperClient>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RequestOptions {
+    pub method: hyper::Method,
+    pub uri: hyper::Uri,
+    pub auth: Option<Bytes>,
+    pub peer_name: Option<Bytes>,
+}
+
+impl RequestOptions {
+    fn build(&self, prepare: Bytes) -> hyper::Request<hyper::Body> {
+        let mut builder = hyper::Request::builder();
+        builder.method(self.method.clone());
+        builder.uri(&self.uri);
+        if let Some(auth) = &self.auth {
+            builder.header(hyper::header::AUTHORIZATION, auth.clone());
+        }
+        if let Some(peer_name) = &self.peer_name {
+            builder.header("ILP-Peer-Name", peer_name.clone());
+        }
+        builder
+            .header(hyper::header::CONTENT_TYPE, OCTET_STREAM)
+            .body(hyper::Body::from(prepare))
+            .expect("RequestOptions::build error")
+    }
 }
 
 impl Client {
@@ -68,23 +79,35 @@ impl Client {
     /// `req_builder` is the base request.
     /// The URI and method should be set, along with extra headers.
     /// `Content-Type` and `Content-Length` should not be set.
-    pub fn request(self, mut req_builder: RequestBuilder, prepare: ilp::Prepare)
+    pub fn request(self, req_opts: RequestOptions, prepare: ilp::Prepare)
         -> impl Future<Item = ilp::Fulfill, Error = ilp::Reject>
     {
         let prepare_bytes = BytesMut::from(prepare).freeze();
-        let req = req_builder
-            .header(hyper::header::CONTENT_TYPE, OCTET_STREAM)
-            .body(hyper::Body::from(prepare_bytes.clone()))
-            .expect("build_prepare_request builder error");
-        let uri = req.uri().clone();
+        let prepare_bytes2 = prepare_bytes.clone();
+        let uri = req_opts.uri.clone();
+        let hyper = Arc::clone(&self.hyper);
 
         self.hyper
-            .request(req)
+            .request(req_opts.build(prepare_bytes.clone()))
+            .and_then(move |res| {
+                // When the first attempt to send the packet failed with a 502,
+                // retry once. The 502 is probably caused by the hidden request/
+                // connection limit described in <https://github.com/interledgerjs/ilp-plugin-http/pull/3>.
+                if res.status() == hyper::StatusCode::BAD_GATEWAY {
+                    warn!(
+                        "remote error; retrying: uri=\"{}\" status={:?}",
+                        req_opts.uri, res.status(),
+                    );
+                    Either::B(hyper.request(req_opts.build(prepare_bytes2)))
+                } else {
+                    Either::A(ok(res))
+                }
+            })
             .then(move |res| match res {
                 Ok(res) => Either::A(self.decode_http_response(uri, res, prepare_bytes)),
                 Err(error) => {
                     warn!(
-                        "outgoing connection error: uri=\"{:?}\" error=\"{}\"",
+                        "outgoing connection error: uri=\"{}\" error=\"{}\"",
                         uri, error,
                     );
                     Either::B(err(self.make_reject(
@@ -124,7 +147,7 @@ impl Client {
                 return Either::A(self.decode_response(uri, body).into_future());
             }
 
-            const TRUNCATE_BODY: usize = 64;
+            const TRUNCATE_BODY: usize = 32;
             let body_str = str::from_utf8(&body);
             let body_str = body_str.map(|s| truncate(s, TRUNCATE_BODY));
             let prepare_str = base64::encode(&prepare);
@@ -214,14 +237,13 @@ mod tests {
                 .http2_only(true)
                 .build(hyper_tls::HttpsConnector::new(4).unwrap()),
         );
-    }
 
-    fn make_request() -> RequestBuilder {
-        let mut builder = hyper::Request::builder();
-        builder.method(hyper::Method::POST);
-        builder.uri(RECEIVER_ORIGIN);
-        builder.header("Authorization", "alice_auth");
-        builder
+        static ref REQUEST_OPTIONS: RequestOptions = RequestOptions {
+            method: hyper::Method::POST,
+            uri: hyper::Uri::from_static(RECEIVER_ORIGIN),
+            auth: Some(Bytes::from("alice_auth")),
+            peer_name: None,
+        };
     }
 
     #[test]
@@ -254,7 +276,7 @@ mod tests {
             })
             .run({
                 CLIENT.clone()
-                    .request(make_request(), testing::PREPARE.clone())
+                    .request(REQUEST_OPTIONS.clone(), testing::PREPARE.clone())
                     .then(|result| -> Result<(), ()> {
                         assert_eq!(result.unwrap(), *testing::FULFILL);
                         Ok(())
@@ -276,7 +298,7 @@ mod tests {
             })
             .run({
                 CLIENT_HTTP2.clone()
-                    .request(make_request(), testing::PREPARE.clone())
+                    .request(REQUEST_OPTIONS.clone(), testing::PREPARE.clone())
                     .then(|result| -> Result<(), ()> {
                         assert_eq!(result.unwrap(), *testing::FULFILL);
                         Ok(())
@@ -295,7 +317,7 @@ mod tests {
             })
             .run({
                 CLIENT.clone()
-                    .request(make_request(), testing::PREPARE.clone())
+                    .request(REQUEST_OPTIONS.clone(), testing::PREPARE.clone())
                     .then(|result| -> Result<(), ()> {
                         assert_eq!(result.unwrap_err(), *testing::REJECT);
                         Ok(())
@@ -320,7 +342,7 @@ mod tests {
             })
             .run({
                 CLIENT.clone()
-                    .request(make_request(), testing::PREPARE.clone())
+                    .request(REQUEST_OPTIONS.clone(), testing::PREPARE.clone())
                     .then(move |result| -> Result<(), ()> {
                         assert_eq!(result.unwrap_err(), expect_reject);
                         Ok(())
@@ -353,7 +375,7 @@ mod tests {
                     })
                     .run({
                         CLIENT.clone()
-                            .request(make_request(), testing::PREPARE.clone())
+                            .request(REQUEST_OPTIONS.clone(), testing::PREPARE.clone())
                             .then(move |result| -> Result<(), ()> {
                                 assert_eq!(result.unwrap_err(), expect_reject);
                                 Ok(())
@@ -395,7 +417,7 @@ mod tests {
             .with_abort()
             .run({
                 CLIENT.clone()
-                    .request(make_request(), testing::PREPARE.clone())
+                    .request(REQUEST_OPTIONS.clone(), testing::PREPARE.clone())
                     .then(move |result| -> Result<(), ()> {
                         assert_eq!(result.unwrap_err(), expect_reject);
                         Ok(())

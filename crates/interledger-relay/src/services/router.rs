@@ -6,7 +6,7 @@ use futures::prelude::*;
 use log::{debug, warn};
 
 use crate::{Service, Request};
-use crate::client::Client;
+use crate::client::{Client, RequestOptions};
 use crate::routes::{Route, RoutingTable};
 
 #[derive(Clone, Debug)]
@@ -87,17 +87,12 @@ impl RouterService {
             },
         };
 
-        let mut builder = hyper::Request::builder();
-        builder.method(hyper::Method::POST);
-        builder.uri(&next_hop);
-        if let Some(auth) = route.auth() {
-            builder.header(
-                hyper::header::AUTHORIZATION,
-                Bytes::from(auth.clone()),
-            );
-        }
-
-        Either::A(self.client.request(builder, prepare))
+        Either::A(self.client.request(RequestOptions {
+            method: hyper::Method::POST,
+            uri: next_hop,
+            auth: route.auth().cloned().map(Bytes::from),
+            peer_name: None,
+        }, prepare))
     }
 
     fn make_reject(&self, code: ilp::ErrorCode, message: &[u8]) -> ilp::Reject {

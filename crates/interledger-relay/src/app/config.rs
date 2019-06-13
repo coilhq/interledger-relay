@@ -3,12 +3,14 @@ use std::collections::HashSet;
 use std::error;
 use std::fmt;
 
+use bytes::Bytes;
 use futures::future::{Either, ok};
 use futures::prelude::*;
 use hyper::Uri;
 use serde::Deserialize;
 
 use crate::{AuthToken, Client, PeerRelation};
+use crate::client::RequestOptions;
 use crate::serde::deserialize_uri;
 use crate::services::ConnectorPeer;
 use ilp::ildcp;
@@ -73,17 +75,17 @@ impl ConnectorRoot {
 fn fetch_ildcp(endpoint: &Uri, auth: &[u8], peer_name: &[u8])
     -> impl Future<Item = ildcp::Response, Error = SetupError>
 {
-    let mut request = hyper::Request::builder();
-    request.method(hyper::Method::POST);
-    request.uri(endpoint);
-    request.header(hyper::header::AUTHORIZATION, auth);
-    request.header("ILP-Peer-Name", peer_name);
     let prepare = ildcp::Request::new().to_prepare();
 
     // Use a dummy address as the sender since the connector doesn't know its
     // address yet.
     Client::new(ilp::Address::new(b"self.ildcp"))
-        .request(request, prepare)
+        .request(RequestOptions {
+            method: hyper::Method::POST,
+            uri: endpoint.clone(),
+            auth: Some(Bytes::from(auth)),
+            peer_name: Some(Bytes::from(peer_name)),
+        }, prepare)
         .from_err()
         .and_then(|fulfill| {
             ildcp::Response::try_from(fulfill)
