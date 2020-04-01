@@ -5,7 +5,7 @@ use std::sync::Arc;
 use futures::future::{Either, FutureResult, err};
 use log::error;
 
-use crate::{AuthToken, PeerRelation, Request, Service};
+use crate::{AuthToken, Relation, Request, Service};
 use crate::middlewares::RequestWithHeaders;
 use crate::services::RequestWithPeerName;
 
@@ -19,7 +19,7 @@ pub struct FromPeerService<S> {
 }
 
 pub trait RequestWithFrom: Request {
-    fn from_relation(&self) -> PeerRelation;
+    fn from_relation(&self) -> Relation;
     fn from_address(&self) -> ilp::Addr;
 }
 
@@ -81,7 +81,7 @@ where
 #[derive(Clone, Debug, PartialEq)]
 pub struct RequestFromPeer {
     base: RequestWithHeaders,
-    from_relation: PeerRelation,
+    from_relation: Relation,
     from_address: ilp::Address,
 }
 
@@ -106,7 +106,7 @@ impl RequestWithPeerName for RequestFromPeer {
 }
 
 impl RequestWithFrom for RequestFromPeer {
-    fn from_relation(&self) -> PeerRelation {
+    fn from_relation(&self) -> Relation {
         self.from_relation
     }
 
@@ -117,8 +117,9 @@ impl RequestWithFrom for RequestFromPeer {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConnectorPeer {
-    pub relation: PeerRelation,
+    pub relation: Relation,
     pub address: ilp::Address,
+    /// The list of valid incoming authentication tokens.
     pub auth: HashSet<AuthToken>,
 }
 
@@ -142,12 +143,12 @@ mod test_from_peer_service {
     lazy_static! {
         static ref PEERS: Vec<ConnectorPeer> = vec![
             ConnectorPeer {
-                relation: PeerRelation::Child,
+                relation: Relation::Child,
                 address: ilp::Address::new(b"test.relay.child"),
                 auth: HashSet::from_iter(vec![AuthToken::new("token_1")]),
             },
             ConnectorPeer {
-                relation: PeerRelation::Parent,
+                relation: Relation::Parent,
                 address: ilp::Address::new(b"test.relay"),
                 auth: HashSet::from_iter(vec![AuthToken::new("token_2")]),
             },
@@ -201,7 +202,7 @@ mod test_from_peer_service {
             next.requests().collect::<Vec<_>>(),
             vec![RequestFromPeer {
                 base: RequestWithHeaders::new(PREPARE.clone(), headers),
-                from_relation: PeerRelation::Child,
+                from_relation: Relation::Child,
                 from_address: ilp::Address::new(b"test.relay.child"),
             }],
         );
@@ -217,7 +218,7 @@ mod test_connector_peer {
     #[test]
     fn test_is_authorized() {
         let peer = ConnectorPeer {
-            relation: PeerRelation::Child,
+            relation: Relation::Child,
             address: ilp::Address::new(b"test.relay"),
             auth: TOKENS
                 .iter()

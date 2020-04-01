@@ -1,5 +1,6 @@
 use std::error;
 use std::fmt;
+use std::time;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use http::HttpTryFrom;
@@ -10,43 +11,18 @@ use serde::Deserialize;
 use crate::AuthToken;
 use crate::serde::deserialize_uri;
 
-// TODO validate target prefixes
-// TODO lint route order: check for unreachable; verify trailing "."
-
-/// A simple static routing table.
-#[derive(Debug, PartialEq)]
-pub struct RoutingTable(Vec<Route>);
-
-impl RoutingTable {
-    #[inline]
-    pub fn new(routes: Vec<Route>) -> Self {
-        RoutingTable(routes)
-    }
-
-    pub fn resolve(&self, destination: ilp::Addr) -> Option<&Route> {
-        self.0
-            .iter()
-            .find(|route| {
-                destination.as_ref().starts_with(&route.target_prefix)
-            })
-    }
-}
-
-impl Default for RoutingTable {
-    fn default() -> Self {
-        RoutingTable::new(Vec::new())
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct Route {
-    target_prefix: Bytes,
-    next_hop: NextHop,
+#[serde(deny_unknown_fields)]
+pub struct StaticRoute {
+    pub target_prefix: Bytes,
+    pub next_hop: NextHop,
+    pub failover: Option<RouteFailover>,
 }
 
 /// Explanation of multilateral mode:
 /// <https://forum.interledger.org/t/describe-multilateral-mode-in-ilp-plugin-http/456/2>
 #[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(tag = "type")]
 pub enum NextHop {
     Bilateral {
@@ -61,19 +37,29 @@ pub enum NextHop {
     },
 }
 
-impl Route {
-    #[inline]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteFailover {
+    pub window_size: usize,
+    /// A route is marked as unhealthy when
+    /// `fail_ratio <= number of failures per window / window_size`.
+    pub fail_ratio: f64,
+    // <https://docs.serde.rs/serde/de/trait.Deserialize.html#impl-Deserialize%3C%27de%3E-for-Duration>
+    pub fail_duration: time::Duration,
+}
+
+impl StaticRoute {
+    #[cfg(test)]
     pub fn new(
         target_prefix: Bytes,
         next_hop: NextHop,
     ) -> Self {
-        Route { target_prefix, next_hop }
+        StaticRoute {
+            target_prefix,
+            next_hop,
+            failover: None,
+        }
     }
-
-    /*#[inline]
-    pub(crate) fn target_prefix(&self) -> &[u8] {
-        &self.target_prefix[..]
-    }*/
 
     pub(crate) fn endpoint(
         &self,
@@ -176,52 +162,7 @@ fn validate_address_segment(segment: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-mod test_routing_table {
-    use lazy_static::lazy_static;
-
-    use crate::testing::ROUTES;
-    use super::*;
-
-    lazy_static! {
-        static ref HOP_0: NextHop = ROUTES[0].next_hop.clone();
-        static ref HOP_1: NextHop = ROUTES[1].next_hop.clone();
-        static ref HOP_2: NextHop = ROUTES[2].next_hop.clone();
-    }
-
-    #[test]
-    fn test_resolve() {
-        let table = RoutingTable::new(vec![
-            Route::new(Bytes::from("test.one"), HOP_0.clone()),
-            Route::new(Bytes::from("test.two"), HOP_1.clone()),
-            Route::new(Bytes::from("test."), HOP_2.clone()),
-        ]);
-        let routes = &table.0;
-        // Exact match.
-        assert_eq!(table.resolve(ilp::Addr::new(b"test.one")), Some(&routes[0]));
-        // Prefix match.
-        assert_eq!(table.resolve(ilp::Addr::new(b"test.one.alice")), Some(&routes[0]));
-        assert_eq!(table.resolve(ilp::Addr::new(b"test.two.bob")), Some(&routes[1]));
-        assert_eq!(table.resolve(ilp::Addr::new(b"test.three")), Some(&routes[2]));
-        // Dot separator isn't necessary.
-        assert_eq!(table.resolve(ilp::Addr::new(b"test.two__")), Some(&routes[1]));
-        // No matching prefix.
-        assert_eq!(table.resolve(ilp::Addr::new(b"example.test.one")), None);
-        assert_eq!(table.resolve(ilp::Addr::new(b"g.alice")), None);
-    }
-
-    #[test]
-    fn test_resolve_catch_all() {
-        let table = RoutingTable::new(vec![
-            Route::new(Bytes::from("test.one"), HOP_0.clone()),
-            Route::new(Bytes::from("test.two"), HOP_1.clone()),
-            Route::new(Bytes::from(""), HOP_2.clone()),
-        ]);
-        assert_eq!(table.resolve(ilp::Addr::new(b"example.test.one")), Some(&table.0[2]));
-    }
-}
-
-#[cfg(test)]
-mod test_route {
+mod test_static_route {
     use lazy_static::lazy_static;
 
     use super::*;
@@ -230,7 +171,7 @@ mod test_route {
         static ref BI_URI: Uri =
             "http://example.com/alice".parse::<Uri>().unwrap();
 
-        static ref BI: Route = Route::new(
+        static ref BI: StaticRoute = StaticRoute::new(
             Bytes::from("test.alice."),
             NextHop::Bilateral {
                 endpoint: BI_URI.clone(),
@@ -238,7 +179,7 @@ mod test_route {
             },
         );
 
-        static ref MULTI: Route = Route::new(
+        static ref MULTI: StaticRoute = StaticRoute::new(
             Bytes::from("test.relay."),
             NextHop::Multilateral {
                 endpoint_prefix: Bytes::from("http://example.com/bob/"),
@@ -247,11 +188,6 @@ mod test_route {
             },
         );
     }
-
-    /*#[test]
-    fn test_target_prefix() {
-        assert_eq!(BI.target_prefix(), b"test.alice.");
-    }*/
 
     #[test]
     fn test_endpoint() {

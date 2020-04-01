@@ -2,7 +2,6 @@ pub mod app;
 mod client;
 mod combinators;
 mod middlewares;
-mod routes;
 mod serde;
 mod services;
 #[cfg(test)]
@@ -14,8 +13,7 @@ use futures::prelude::*;
 
 pub use self::client::Client;
 pub use self::middlewares::AuthToken;
-pub use self::routes::{NextHop, Route};
-pub use self::services::DebugServiceOptions;
+pub use self::services::{DebugServiceOptions, NextHop, RouteFailover, RoutingTable, StaticRoute};
 
 // TODO maybe support ping protocol
 // TODO support auth header "Bearer: " prefix
@@ -33,8 +31,9 @@ pub trait Request: Into<ilp::Prepare> + Borrow<ilp::Prepare> {}
 impl Request for ilp::Prepare {}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum PeerRelation {
+pub enum Relation {
     Child,
+    Peer,
     Parent,
 }
 

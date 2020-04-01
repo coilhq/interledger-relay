@@ -13,6 +13,7 @@ pub struct DebugService<S> {
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DebugServiceOptions {
     pub log_prepare: bool,
     pub log_fulfill: bool,

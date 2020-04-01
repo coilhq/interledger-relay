@@ -5,8 +5,8 @@ use std::time;
 use futures::prelude::*;
 use serde::Deserialize;
 
-pub use self::config::{ConnectorRoot, PeerConfig, SetupError};
-use crate::{Client, Route};
+pub use self::config::{ConnectorRoot, RelationConfig, SetupError};
+use crate::{Client, RoutingTable};
 use crate::middlewares::{AuthTokenFilter, HealthCheckFilter, MethodFilter, Receiver};
 use crate::services::{ConfigService, DebugService, DebugServiceOptions, EchoService};
 use crate::services::{ExpiryService, FromPeerService, RouterService};
@@ -16,10 +16,11 @@ use crate::services::{ExpiryService, FromPeerService, RouterService};
 const DEFAULT_MAX_TIMEOUT: time::Duration = time::Duration::from_secs(60);
 
 #[derive(Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub root: ConnectorRoot,
-    pub peers: Vec<PeerConfig>,
-    pub routes: Vec<Route>,
+    pub peers: Vec<RelationConfig>,
+    pub routes: RoutingTable,
     #[serde(default)]
     pub debug_service: DebugServiceOptions,
 }
@@ -82,12 +83,12 @@ mod test_config {
     static CONNECTOR_ADDR: ([u8; 4], u16) = ([127, 0, 0, 1], 3002);
 
     lazy_static! {
-        static ref PEERS: Vec<PeerConfig> = vec![
-            PeerConfig::Child {
+        static ref PEERS: Vec<RelationConfig> = vec![
+            RelationConfig::Child {
                 auth: vec![AuthToken::new("secret_child")],
                 suffix: "child".to_owned(),
             },
-            PeerConfig::Parent {
+            RelationConfig::Parent {
                 auth: vec![AuthToken::new("secret_parent")],
             },
         ];
@@ -102,7 +103,7 @@ mod test_config {
                 asset_code: "XRP".to_owned(),
             },
             peers: PEERS.clone(),
-            routes: testing::ROUTES.clone(),
+            routes: RoutingTable::new(testing::ROUTES.clone()),
             debug_service: DebugServiceOptions::default(),
         };
 
@@ -195,7 +196,7 @@ mod test_config {
                 asset_code: "XRP".to_owned(),
             },
             peers: PEERS.clone(),
-            routes: testing::ROUTES.clone(),
+            routes: RoutingTable::new(testing::ROUTES.clone()),
             debug_service: DebugServiceOptions::default(),
         }.start();
 

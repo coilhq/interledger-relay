@@ -37,7 +37,7 @@ where
     >;
 
     fn call(&mut self, request: hyper::Request<hyper::Body>) -> Self::Future {
-        static BODY: &'static [u8] = b"OK";
+        static BODY: &[u8] = b"OK";
         if request.method() == hyper::Method::GET {
             Either::A(ok(hyper::Response::builder()
                 .status(hyper::StatusCode::OK)

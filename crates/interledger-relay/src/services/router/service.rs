@@ -7,7 +7,7 @@ use log::{debug, warn};
 
 use crate::{Service, Request};
 use crate::client::{Client, RequestOptions};
-use crate::routes::{Route, RoutingTable};
+use super::{RoutingError, RoutingTable};
 
 #[derive(Clone, Debug)]
 pub struct RouterService {
@@ -38,41 +38,52 @@ where
 }
 
 impl RouterService {
-    pub fn new(client: Client, routes: Vec<Route>) -> Self {
+    pub fn new(client: Client, routes: RoutingTable) -> Self {
         RouterService {
             data: Arc::new(ServiceData {
                 address: client.address().clone(),
-                routes: RwLock::new(RoutingTable::new(routes)),
+                routes: RwLock::new(routes),
             }),
             client,
         }
     }
 
     /// Replace the routing table.
-    pub fn set_routes(&self, new_routes: Vec<Route>) {
+    pub fn set_routes(&self, new_routes: RoutingTable) {
         let mut routes = self.data.routes.write().unwrap();
-        *routes = RoutingTable::new(new_routes);
+        *routes = new_routes;
     }
 
     fn forward(self, prepare: ilp::Prepare)
         -> impl Future<Item = ilp::Fulfill, Error = ilp::Reject>
     {
         let routes = self.data.routes.read().unwrap();
-        let route = match routes.resolve(prepare.destination()) {
-            Some(route) => route,
-            None => {
+        let (route_index, route) = match routes.resolve(prepare.destination()) {
+            Ok((i, route)) => (i, route),
+            Err(RoutingError::NoRoute) => {
                 debug!(
-                    "no route found: destination=\"{}\"",
+                    "no route exists: destination=\"{}\"",
                     prepare.destination(),
                 );
                 return Either::B(err(self.make_reject(
                     ilp::ErrorCode::F02_UNREACHABLE,
-                    b"no route found",
-                )))
+                    b"no route exists",
+                )));
+            },
+            Err(RoutingError::NoHeathyRoute) => {
+                debug!(
+                    "no healthy route found: destination=\"{}\"",
+                    prepare.destination(),
+                );
+                return Either::B(err(self.make_reject(
+                    ilp::ErrorCode::T01_PEER_UNREACHABLE,
+                    b"no healthy route found",
+                )));
             },
         };
+        let has_failover = route.config.failover.is_some();
 
-        let next_hop = route.endpoint(
+        let next_hop = route.config.endpoint(
             self.data.address.as_addr(),
             prepare.destination(),
         );
@@ -87,12 +98,30 @@ impl RouterService {
             },
         };
 
-        Either::A(self.client.request(RequestOptions {
-            method: hyper::Method::POST,
-            uri: next_hop,
-            auth: route.auth().cloned().map(Bytes::from),
-            peer_name: None,
-        }, prepare))
+        let auth = route.config.auth().cloned().map(Bytes::from);
+        // Don't hold onto the table mutex during the HTTP request.
+        std::mem::drop(routes);
+
+        let service_data = Arc::clone(&self.data);
+        let do_request = self.client
+            .request(RequestOptions {
+                method: hyper::Method::POST,
+                uri: next_hop,
+                auth,
+                peer_name: None,
+            }, prepare)
+            .then(move |result| {
+                if has_failover {
+                    // TODO it would be nice if this could be modified without locking the whole routing table.. maybe use atomics?
+                    let mut routes = service_data.routes.write().unwrap();
+                    let is_success =
+                        response_is_ok(service_data.address.as_addr(), &result);
+                    routes.update(route_index, is_success)
+                }
+                result
+            });
+
+        Either::A(do_request)
     }
 
     fn make_reject(&self, code: ilp::ErrorCode, message: &[u8]) -> ilp::Reject {
@@ -105,20 +134,37 @@ impl RouterService {
     }
 }
 
+fn response_is_ok(
+    connector_address: ilp::Addr,
+    response: &Result<ilp::Fulfill, ilp::Reject>,
+) -> bool {
+    let is_unhealthy = match response {
+        Ok(_) => false,
+        Err(reject) => {
+            // Corresponds to a 5xx error and connection errors.
+            reject.code() == ilp::ErrorCode::T01_PEER_UNREACHABLE
+                && reject.triggered_by() == Some(connector_address)
+        },
+    };
+    !is_unhealthy
+}
+
 #[cfg(test)]
 mod test_router_service {
     use bytes::Bytes;
     use hyper::Uri;
     use lazy_static::lazy_static;
 
-    use crate::NextHop;
+    use crate::{NextHop, RouteFailover, StaticRoute};
     use crate::testing::{self, ADDRESS, RECEIVER_ORIGIN, ROUTES};
     use super::*;
 
     lazy_static! {
         static ref CLIENT: Client = Client::new(ADDRESS.to_address());
-        static ref ROUTER: RouterService =
-            RouterService::new(CLIENT.clone(), ROUTES.clone());
+        static ref ROUTER: RouterService = RouterService::new(
+            CLIENT.clone(),
+            RoutingTable::new(ROUTES.clone()),
+        );
     }
 
     #[test]
@@ -156,6 +202,40 @@ mod test_router_service {
     }
 
     #[test]
+    fn test_mark_as_unhealthy() {
+        let router = RouterService::new(CLIENT.clone(), RoutingTable::new(vec![
+            StaticRoute {
+                failover: Some(RouteFailover {
+                    window_size: 20,
+                    fail_ratio: 0.01,
+                    fail_duration: std::time::Duration::from_secs(5),
+                }),
+                ..ROUTES[0].clone()
+            },
+        ]));
+        testing::MockServer::new()
+            .test_request(|req| { assert_eq!(req.uri().path(), "/alice"); })
+            .test_body(|body| { assert_eq!(body.as_ref(), testing::PREPARE.as_ref()); })
+            .with_response(|| {
+                hyper::Response::builder()
+                    .status(500)
+                    .body(hyper::Body::empty())
+                    .unwrap()
+            })
+            .run({
+                router.clone()
+                    .call(testing::PREPARE.clone())
+                    .then(move |result| -> Result<(), ()> {
+                        assert!(result.is_err());
+                        let routes = router.data.routes.read().unwrap();
+                        let route = &routes.as_ref()[0];
+                        assert_eq!(route.is_available(), false);
+                        Ok(())
+                    })
+            });
+    }
+
+    #[test]
     fn test_outgoing_request_multilateral() {
         testing::MockServer::new()
             .test_request(|req| {
@@ -183,14 +263,17 @@ mod test_router_service {
     }
 
     #[test]
-    fn test_no_route() {
+    fn test_no_route_exists() {
         let expect_reject = ilp::RejectBuilder {
             code: ilp::ErrorCode::F02_UNREACHABLE,
-            message: b"no route found",
+            message: b"no route exists",
             triggered_by: Some(ADDRESS),
             data: b"",
         }.build();
-        let router = RouterService::new(CLIENT.clone(), vec![ROUTES[1].clone()]);
+        let router = RouterService::new(
+            CLIENT.clone(),
+            RoutingTable::new(vec![ROUTES[1].clone()]),
+        );
         testing::MockServer::new().run({
             router
                 .call(testing::PREPARE.clone())
@@ -204,15 +287,15 @@ mod test_router_service {
     #[test]
     fn test_set_routes() {
         let router = ROUTER.clone();
-        router.set_routes(vec![
-            Route::new(
+        router.set_routes(RoutingTable::new(vec![
+            StaticRoute::new(
                 Bytes::from("test.alice."),
                 NextHop::Bilateral {
                     endpoint: format!("{}/new_alice", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
                     auth: None,
                 },
             ),
-        ]);
+        ]));
         testing::MockServer::new()
             .test_request(|req| {
                 assert_eq!(req.uri().path(), "/new_alice");

@@ -11,7 +11,7 @@ use lazy_static::lazy_static;
 use tokio::runtime::Runtime;
 use tokio::timer::Delay;
 
-use crate::{AuthToken, NextHop, Request, Route, Service};
+use crate::{AuthToken, NextHop, Request, Service, StaticRoute};
 
 const EXPIRES_IN: Duration = Duration::from_secs(20);
 
@@ -59,29 +59,32 @@ lazy_static! {
         data: b"reject data",
     }.build();
 
-    pub static ref ROUTES: Vec<Route> = vec![
-        Route::new(
-            Bytes::from("test.alice."),
-            NextHop::Bilateral {
+    pub static ref ROUTES: Vec<StaticRoute> = vec![
+        StaticRoute {
+            target_prefix: Bytes::from("test.alice."),
+            next_hop: NextHop::Bilateral {
                 endpoint: format!("{}/alice", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
                 auth: Some(AuthToken::new("alice_auth")),
             },
-        ),
-        Route::new(
-            Bytes::from("test.relay."),
-            NextHop::Multilateral {
+            failover: None,
+        },
+        StaticRoute {
+            target_prefix: Bytes::from("test.relay."),
+            next_hop: NextHop::Multilateral {
                 endpoint_prefix: Bytes::from(format!("{}/bob/", RECEIVER_ORIGIN)),
                 endpoint_suffix: Bytes::from("/ilp"),
                 auth: Some(AuthToken::new("bob_auth")),
             },
-        ),
-        Route::new(
-            Bytes::from(""),
-            NextHop::Bilateral {
+            failover: None,
+        },
+        StaticRoute {
+            target_prefix: Bytes::from(""),
+            next_hop: NextHop::Bilateral {
                 endpoint: format!("{}/default", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
                 auth: Some(AuthToken::new("default_auth")),
             },
-        ),
+            failover: None,
+        },
     ];
 }
 

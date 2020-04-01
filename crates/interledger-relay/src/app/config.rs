@@ -9,13 +9,14 @@ use futures::prelude::*;
 use hyper::Uri;
 use serde::Deserialize;
 
-use crate::{AuthToken, Client, PeerRelation};
+use crate::{AuthToken, Client, Relation};
 use crate::client::RequestOptions;
 use crate::serde::deserialize_uri;
 use crate::services::ConnectorPeer;
 use ilp::ildcp;
 
 #[derive(Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(tag = "type")]
 pub enum ConnectorRoot {
     Static {
@@ -32,13 +33,18 @@ pub enum ConnectorRoot {
     },
 }
 
+/// The `auth` token lists are valid incoming authentication tokens.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(tag = "type")]
-pub enum PeerConfig {
+pub enum RelationConfig {
     Child {
         auth: Vec<AuthToken>,
         /// The suffix must be an ILP address segment.
         suffix: String,
+    },
+    Peer {
+        auth: Vec<AuthToken>,
     },
     Parent {
         auth: Vec<AuthToken>,
@@ -94,18 +100,20 @@ fn fetch_ildcp(endpoint: &Uri, auth: &[u8], peer_name: &[u8])
         })
 }
 
-impl PeerConfig {
-    fn relation(&self) -> PeerRelation {
+impl RelationConfig {
+    fn relation(&self) -> Relation {
         match self {
-            PeerConfig::Child { .. } => PeerRelation::Child,
-            PeerConfig::Parent { .. } =>  PeerRelation::Parent,
+            RelationConfig::Child { .. } => Relation::Child,
+            RelationConfig::Peer { .. } => Relation::Peer,
+            RelationConfig::Parent { .. } =>  Relation::Parent,
         }
     }
 
     pub(crate) fn auth_tokens(&self) -> &[AuthToken] {
         match self {
-            PeerConfig::Child { auth, .. } => auth,
-            PeerConfig::Parent { auth, .. } => auth,
+            RelationConfig::Child { auth, .. } => auth,
+            RelationConfig::Peer { auth, .. } => auth,
+            RelationConfig::Parent { auth, .. } => auth,
         }
     }
 
@@ -113,10 +121,13 @@ impl PeerConfig {
         -> Result<ConnectorPeer, SetupError>
     {
         let address = match self {
-            PeerConfig::Child { suffix, .. } => {
+            RelationConfig::Child { suffix, .. } => {
                 parent_address.with_suffix(suffix.as_bytes())?
             },
-            PeerConfig::Parent { .. } => parent_address.clone(),
+            // This is the wrong address for the peer, but we don't know their address.
+            // It's only ever used in logging.
+            RelationConfig::Peer { .. } => parent_address.clone(),
+            RelationConfig::Parent { .. } => parent_address.clone(),
         };
 
         Ok(ConnectorPeer {

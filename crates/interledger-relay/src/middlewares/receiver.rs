@@ -10,7 +10,7 @@ use crate::{Request, Service};
 use crate::combinators::{LimitStream, LimitStreamError};
 use crate::services;
 
-static PEER_NAME: &'static str = "ILP-Peer-Name";
+static PEER_NAME: &str = "ILP-Peer-Name";
 
 const MAX_REQUEST_SIZE: usize = {
     const ENVELOPE: usize = 1 + 8;
@@ -157,7 +157,7 @@ impl services::RequestWithPeerName for RequestWithHeaders {
 fn make_http_response(packet: Result<ilp::Fulfill, ilp::Reject>)
     -> hyper::Response<hyper::Body>
 {
-    static OCTET_STREAM: &'static [u8] = b"application/octet-stream";
+    static OCTET_STREAM: &[u8] = b"application/octet-stream";
     let buffer = match packet {
         Ok(fulfill) => BytesMut::from(fulfill),
         Err(reject) => BytesMut::from(reject),

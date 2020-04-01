@@ -8,8 +8,8 @@ use ilp::oer::BufOerExt;
 
 const MIN_MESSAGE_WINDOW: time::Duration = time::Duration::from_secs(1);
 
-static ECHO_REQUEST_PREFIX: &'static [u8] = b"ECHOECHOECHOECHO\x00";
-static ECHO_RESPONSE: &'static [u8] = b"ECHOECHOECHOECHO\x01";
+static ECHO_REQUEST_PREFIX: &[u8] = b"ECHOECHOECHOECHO\x00";
+static ECHO_RESPONSE: &[u8] = b"ECHOECHOECHOECHO\x01";
 
 #[derive(Clone, Debug)]
 pub struct EchoService<S> {

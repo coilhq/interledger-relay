@@ -23,7 +23,7 @@ const MAX_RESPONSE_SIZE: usize = {
     ENVELOPE + CODE + TRIGGERED_BY + MESSAGE + DATA
 };
 
-static OCTET_STREAM: &'static [u8] = b"application/octet-stream";
+static OCTET_STREAM: &[u8] = b"application/octet-stream";
 
 #[derive(Clone, Debug)]
 pub struct Client {
@@ -127,6 +127,7 @@ impl Client {
         let status = res.status();
         let res_body = LimitStream::new(MAX_RESPONSE_SIZE, res.into_body());
         // TODO timeout if response takes too long?
+        // TODO use content-length to hint buffer size?
         res_body.concat2().then(move |body| {
             let body = match body {
                 Ok(body) => Bytes::from(body),

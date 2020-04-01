@@ -3,7 +3,7 @@ use std::sync::Arc;
 use futures::future::{Either, FutureResult, err, ok};
 use log::warn;
 
-use crate::{PeerRelation, Request, Service};
+use crate::{Relation, Request, Service};
 use ilp::ildcp;
 use super::RequestWithFrom;
 
@@ -52,11 +52,26 @@ where
             return Either::B(self.next.call(request));
         }
 
+        // TODO use matches!() macro
+        match request.from_relation() {
+            Relation::Child => {},
+            _ => {
+                warn!(
+                    "ildcp request from non-child peer: relation={:?} from_address={:?}",
+                    request.from_relation(), request.from_address(),
+                );
+                return Either::A(err(self.make_reject(
+                    ilp::ErrorCode::F00_BAD_REQUEST,
+                    b"ILDCP request from non-child peer",
+                )))
+            },
+        }
+
         let peer_name = match request.peer_name() {
             Some(peer_name) => peer_name,
             None => {
                 warn!(
-                    "ildcp request missing ILP-Peer-Name: from={:?}",
+                    "ildcp request missing ILP-Peer-Name: from_address={:?}",
                     request.from_address(),
                 );
                 return Either::A(err(self.make_reject(
@@ -65,20 +80,6 @@ where
                 )))
             },
         };
-
-        match request.from_relation() {
-            PeerRelation::Child => {},
-            _ => {
-                warn!(
-                    "ildcp request from non-child peer: from={:?}",
-                    request.from_address(),
-                );
-                return Either::A(err(self.make_reject(
-                    ilp::ErrorCode::F00_BAD_REQUEST,
-                    b"ILDCP request from non-child peer",
-                )))
-            },
-        }
 
         // If the generated address is invalid it is probably too long or the
         // `ILP-Peer-Name` was invalid.
@@ -131,14 +132,14 @@ mod test_config_service {
         static ref REQUEST_PREPARE: TestRequest = TestRequest {
             prepare: PREPARE.clone(),
             peer_name: None,
-            from_relation: PeerRelation::Child,
+            from_relation: Relation::Child,
             from_address: ilp::Address::new(b"test.carl.child.123"),
         };
 
         static ref REQUEST_ILDCP: TestRequest = TestRequest {
             prepare: ilp::Prepare::from(ildcp::Request::new()),
             peer_name: Some(b"bob"),
-            from_relation: PeerRelation::Child,
+            from_relation: Relation::Child,
             from_address:  ilp::Address::new(b"test.carl.child.123"),
         };
     }
@@ -177,7 +178,7 @@ mod test_config_service {
     fn test_ildcp_from_parent() {
         let request = {
             let mut request = REQUEST_ILDCP.clone();
-            request.from_relation = PeerRelation::Parent;
+            request.from_relation = Relation::Parent;
             request
         };
         assert_eq!(
@@ -211,7 +212,7 @@ mod test_config_service {
     struct TestRequest {
         prepare: ilp::Prepare,
         peer_name: Option<&'static [u8]>,
-        from_relation: PeerRelation,
+        from_relation: Relation,
         from_address: ilp::Address,
     }
 
@@ -236,7 +237,7 @@ mod test_config_service {
     }
 
     impl RequestWithFrom for TestRequest {
-        fn from_relation(&self) -> PeerRelation {
+        fn from_relation(&self) -> Relation {
             self.from_relation
         }
 
