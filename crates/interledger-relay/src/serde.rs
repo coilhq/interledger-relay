@@ -111,7 +111,7 @@ mod tests {
                         auth: vec![AuthToken::new("parent_secret")],
                     },
                 ],
-                routes: RoutingTable::new(ROUTES[0..=1].to_vec()),
+                routes: ROUTES[0..=1].to_vec(),
                 debug_service: DebugServiceOptions {
                     log_prepare: false,
                     log_fulfill: false,

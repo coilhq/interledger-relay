@@ -112,11 +112,12 @@ impl RouterService {
             }, prepare)
             .then(move |result| {
                 if has_failover {
-                    // TODO it would be nice if this could be modified without locking the whole routing table.. maybe use atomics?
-                    let mut routes = service_data.routes.write().unwrap();
                     let is_success =
                         response_is_ok(service_data.address.as_addr(), &result);
-                    routes.update(route_index, is_success)
+                    service_data.routes
+                        .read()
+                        .unwrap()
+                        .update(route_index, is_success)
                 }
                 result
             });

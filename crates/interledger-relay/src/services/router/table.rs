@@ -7,7 +7,7 @@ use super::{DynamicRoute, StaticRoute};
 ///
 /// Resolution is first-to-last, so the catch-all route (if any) should be the
 /// last item.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct RoutingTable(Vec<DynamicRoute>);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -42,7 +42,7 @@ impl RoutingTable {
                 route_exists = true;
                 route.is_available()
             })
-            .ok_or_else(|| if route_exists {
+            .ok_or(if route_exists {
                 RoutingError::NoHeathyRoute
             } else {
                 RoutingError::NoRoute
@@ -70,7 +70,7 @@ impl RoutingTable {
             })
     }
 
-    pub(crate) fn update(&mut self, index: usize, is_success: bool) {
+    pub(crate) fn update(&self, index: usize, is_success: bool) {
         self.0[index].update(is_success)
     }
 }
@@ -142,7 +142,7 @@ mod test_routing_table {
             StaticRoute::new(Bytes::from("test.one"), HOP_1.clone()),
         ]);
 
-        table.0[0].status = RouteStatus::Unhealthy {
+        *table.0[0].status.write().unwrap() = RouteStatus::Unhealthy {
             until: time::Instant::now() + time::Duration::from_secs(1),
         };
         assert_eq!(
@@ -150,7 +150,7 @@ mod test_routing_table {
             Ok((1, &table.as_ref()[1])),
         );
 
-        table.0[1].status = RouteStatus::Unhealthy {
+        *table.0[1].status.write().unwrap() = RouteStatus::Unhealthy {
             until: time::Instant::now() + time::Duration::from_secs(1),
         };
         assert_eq!(

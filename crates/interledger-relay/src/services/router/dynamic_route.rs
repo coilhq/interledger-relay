@@ -1,3 +1,4 @@
+use std::sync;
 use std::time;
 
 use log::{info, warn};
@@ -8,10 +9,13 @@ const MAX_WINDOW_DURATION: time::Duration =
     time::Duration::from_secs(5 * 60);
 
 /// A dynamic route's availability changes according to the health of its endpoint.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub struct DynamicRoute {
     pub config: StaticRoute,
-    pub status: RouteStatus,
+    /// The whole routing table is in a `RwLock`, but wrapping each `status` in
+    /// an independent lock ensures that e.g. routing table lookups don't interfere
+    /// with health updates.
+    pub status: sync::RwLock<RouteStatus>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -30,32 +34,44 @@ pub enum RouteStatus {
 
 impl DynamicRoute {
     pub fn new(config: StaticRoute) -> Self {
-        let status = match &config.failover {
+        let status = sync::RwLock::new(match &config.failover {
             None => RouteStatus::Infallible,
             Some(failover) => RouteStatus::Healthy {
                 remaining: failover.window_size,
                 failures: 0,
                 updated_at: time::Instant::now(),
             },
-        };
+        });
         DynamicRoute { config, status }
     }
 
+    pub fn with_status(config: StaticRoute, status: RouteStatus) -> Self {
+        DynamicRoute {
+            config,
+            status: sync::RwLock::new(status),
+        }
+    }
+
     pub fn is_available(&self) -> bool {
-        match self.status {
+        match *self.status.read().unwrap() {
             RouteStatus::Infallible => true,
             RouteStatus::Healthy { .. } => true,
             RouteStatus::Unhealthy { until } => until < time::Instant::now(),
         }
     }
 
-    pub fn update(&mut self, is_success: bool) {
+    pub fn update(&self, is_success: bool) {
         self.update_with_now(is_success, time::Instant::now());
     }
 
-    fn update_with_now(&mut self, is_success: bool, now: time::Instant) {
+    fn update_with_now(&self, is_success: bool, now: time::Instant) {
         let fails = (!is_success) as usize;
-        match &mut self.status {
+        if *self.status.read().unwrap() == RouteStatus::Infallible {
+            return;
+        }
+
+        let mut status = self.status.write().unwrap();
+        match &mut *status {
             RouteStatus::Infallible => {},
             RouteStatus::Healthy { remaining, failures, updated_at } => {
                 let failover = self.config.failover.as_ref().unwrap();
@@ -72,7 +88,7 @@ impl DynamicRoute {
                     // Test the `fail_ratio` even before `remaining` is `0`, so
                     // that bad routes fail early.
                     let until = now + failover.fail_duration;
-                    self.status = RouteStatus::Unhealthy { until };
+                    *status = RouteStatus::Unhealthy { until };
                     warn!(
                         "marking route unhealthy: target_prefix={:?} next_hop={:?} until={:?}",
                         self.config.target_prefix,
@@ -92,13 +108,21 @@ impl DynamicRoute {
                     self.config.target_prefix,
                     self.config.next_hop,
                 );
-                self.status = RouteStatus::Healthy {
+                *status = RouteStatus::Healthy {
                     remaining: failover.window_size - fails,
                     failures: fails,
                     updated_at: now,
                 };
             },
         }
+    }
+}
+
+#[cfg(test)]
+impl PartialEq for DynamicRoute {
+    fn eq(&self, other: &DynamicRoute) -> bool {
+        self.config == other.config
+            && *self.status.read().unwrap() == *other.status.read().unwrap()
     }
 }
 
@@ -128,14 +152,14 @@ mod test_dynamic_route {
     #[test]
     fn test_is_available() {
         let now = time::Instant::now();
-        let unhealthy_past = DynamicRoute {
-            config: ROUTE.clone(),
-            status: RouteStatus::Unhealthy { until: now - SECOND },
-        };
-        let unhealthy_future = DynamicRoute {
-            config: ROUTE.clone(),
-            status: RouteStatus::Unhealthy { until: now + SECOND },
-        };
+        let unhealthy_past = DynamicRoute::with_status(
+            ROUTE.clone(),
+            RouteStatus::Unhealthy { until: now - SECOND },
+        );
+        let unhealthy_future = DynamicRoute::with_status(
+            ROUTE.clone(),
+            RouteStatus::Unhealthy { until: now + SECOND },
+        );
         assert_eq!(unhealthy_past.is_available(), true);
         assert_eq!(unhealthy_future.is_available(), false);
     }
@@ -223,12 +247,12 @@ mod test_dynamic_route {
         ];
 
         for (i, test) in tests.iter().enumerate() {
-            let mut route = DynamicRoute {
-                config: ROUTE.clone(),
-                status: test.before.clone(),
-            };
+            let route =
+                DynamicRoute::with_status(ROUTE.clone(), test.before.clone());
             route.update_with_now(test.success, now);
-            assert_eq!(route.status, test.after, "index={:?}", i);
+            let route_after =
+                DynamicRoute::with_status(ROUTE.clone(), test.after.clone());
+            assert_eq!(route, route_after, "index={:?}", i);
         }
     }
 }

@@ -6,10 +6,11 @@ use futures::prelude::*;
 use serde::Deserialize;
 
 pub use self::config::{ConnectorRoot, RelationConfig, SetupError};
-use crate::{Client, RoutingTable};
+use crate::{Client, RoutingTable, StaticRoute};
 use crate::middlewares::{AuthTokenFilter, HealthCheckFilter, MethodFilter, Receiver};
 use crate::services::{ConfigService, DebugService, DebugServiceOptions, EchoService};
 use crate::services::{ExpiryService, FromPeerService, RouterService};
+use ilp::ildcp;
 
 /// The maximum duration that the outgoing HTTP client will wait for a response,
 /// even if the Prepare's expiry is longer.
@@ -20,7 +21,7 @@ const DEFAULT_MAX_TIMEOUT: time::Duration = time::Duration::from_secs(60);
 pub struct Config {
     pub root: ConnectorRoot,
     pub peers: Vec<RelationConfig>,
-    pub routes: RoutingTable,
+    pub routes: Vec<StaticRoute>,
     #[serde(default)]
     pub debug_service: DebugServiceOptions,
 }
@@ -40,34 +41,42 @@ pub type Connector =
 impl Config {
     pub fn start(self) -> impl Future<Item = Connector, Error = SetupError> {
         self.root.load_config().and_then(move |ildcp| {
-            let address = ildcp.client_address().to_address();
-            let auth_tokens = self.peers
-                .iter()
-                .flat_map(|peer| peer.auth_tokens().iter())
-                .cloned();
-            let peers = self.peers
-                .iter()
-                .map(|peer| {
-                    peer.with_parent(&address)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            let client = Client::new(address.clone());
-            let router_svc = RouterService::new(client, self.routes);
-            let echo_svc = EchoService::new(address.clone(), router_svc);
-            let ildcp_svc = ConfigService::new(ildcp, echo_svc);
-            let from_peer_svc =
-                FromPeerService::new(address.clone(), peers, ildcp_svc);
-            let expiry_svc =
-                ExpiryService::new(address, DEFAULT_MAX_TIMEOUT, from_peer_svc);
-            let debug_svc =
-                DebugService::new("packet", self.debug_service, expiry_svc);
-
-            let receiver = Receiver::new(debug_svc);
-            let auth_filter = AuthTokenFilter::new(auth_tokens, receiver);
-            let method_filter = MethodFilter::new(hyper::Method::POST, auth_filter);
-            Ok(HealthCheckFilter::new(method_filter))
+            self.start_with_ildcp(ildcp)
         })
+    }
+
+    // Used for benchmarking.
+    #[doc(hidden)]
+    pub fn start_with_ildcp(self, ildcp: ildcp::Response)
+        -> Result<Connector, SetupError>
+    {
+        let address = ildcp.client_address().to_address();
+        let auth_tokens = self.peers
+            .iter()
+            .flat_map(|peer| peer.auth_tokens().iter())
+            .cloned();
+        let peers = self.peers
+            .iter()
+            .map(|peer| {
+                peer.with_parent(&address)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let client = Client::new(address.clone());
+        let router_svc = RouterService::new(client, RoutingTable::new(self.routes));
+        let echo_svc = EchoService::new(address.clone(), router_svc);
+        let ildcp_svc = ConfigService::new(ildcp, echo_svc);
+        let from_peer_svc =
+            FromPeerService::new(address.clone(), peers, ildcp_svc);
+        let expiry_svc =
+            ExpiryService::new(address, DEFAULT_MAX_TIMEOUT, from_peer_svc);
+        let debug_svc =
+            DebugService::new("packet", self.debug_service, expiry_svc);
+
+        let receiver = Receiver::new(debug_svc);
+        let auth_filter = AuthTokenFilter::new(auth_tokens, receiver);
+        let method_filter = MethodFilter::new(hyper::Method::POST, auth_filter);
+        Ok(HealthCheckFilter::new(method_filter))
     }
 }
 
@@ -103,7 +112,7 @@ mod test_config {
                 asset_code: "XRP".to_owned(),
             },
             peers: PEERS.clone(),
-            routes: RoutingTable::new(testing::ROUTES.clone()),
+            routes: testing::ROUTES.clone(),
             debug_service: DebugServiceOptions::default(),
         };
 
@@ -196,7 +205,7 @@ mod test_config {
                 asset_code: "XRP".to_owned(),
             },
             peers: PEERS.clone(),
-            routes: RoutingTable::new(testing::ROUTES.clone()),
+            routes: testing::ROUTES.clone(),
             debug_service: DebugServiceOptions::default(),
         }.start();
 
