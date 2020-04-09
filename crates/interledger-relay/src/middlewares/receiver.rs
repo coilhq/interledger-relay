@@ -1,13 +1,15 @@
 use std::borrow::Borrow;
+use std::pin::Pin;
 
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use futures::future::{Either, err, ok};
 use futures::prelude::*;
+use futures::task::{Context, Poll};
 use hyper::StatusCode;
 use log::warn;
 
 use crate::{Request, Service};
-use crate::combinators::{LimitStream, LimitStreamError};
+use crate::combinators::{self, LimitStreamError};
 use crate::services;
 
 static PEER_NAME: &str = "ILP-Peer-Name";
@@ -26,20 +28,27 @@ pub struct Receiver<S> {
     next: S,
 }
 
-impl<S> hyper::service::Service for Receiver<S>
+type HTTPRequest = http::Request<hyper::Body>;
+
+impl<S> hyper::service::Service<HTTPRequest> for Receiver<S>
 where
     S: Service<RequestWithHeaders> + 'static + Clone + Send,
 {
-    type ReqBody = hyper::Body;
-    type ResBody = hyper::Body;
+    type Response = http::Response<hyper::Body>;
     type Error = hyper::Error;
-    type Future = Box<dyn Future<
-        Item = hyper::Response<hyper::Body>,
-        Error = hyper::Error,
-    > + Send + 'static>;
+    type Future = Pin<Box<dyn Future<
+        Output = Result<Self::Response, Self::Error>,
+    > + Send + 'static>>;
 
-    fn call(&mut self, req: hyper::Request<Self::ReqBody>) -> Self::Future {
-        Box::new(self.handle(req))
+    fn poll_ready(&mut self, _context: &mut Context<'_>)
+        -> Poll<Result<(), Self::Error>>
+    {
+       // XXX ???
+       Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: HTTPRequest) -> Self::Future {
+        Box::pin(self.handle(req))
     }
 }
 
@@ -54,62 +63,67 @@ where
 
     fn handle(&self, req: hyper::Request<hyper::Body>)
         -> impl Future<
-            Item = hyper::Response<hyper::Body>,
-            Error = hyper::Error,
+            Output = Result<hyper::Response<hyper::Body>, hyper::Error>,
         > + Send + 'static
     {
         let next = self.next.clone();
         let (parts, body) = req.into_parts();
-        LimitStream::new(MAX_REQUEST_SIZE, body)
-            .concat2()
-            .then(move |chunk_result| {
-                // The Result-in-a-Result is awkward, is there a better way?
-                let prepare_result = chunk_result.map(chunk_to_prepare);
-                match prepare_result {
-                    Ok(Ok(prepare)) => Either::A({
-                        next
-                            .call(RequestWithHeaders {
-                                prepare,
-                                headers: parts.headers,
-                            })
-                            .then(|res_packet| {
-                                Ok(make_http_response(res_packet))
-                            })
-                    }),
-                    Err(LimitStreamError::StreamError(error)) => {
-                        Either::B(err(error))
-                    },
-                    // The incoming request body was too large.
-                    Err(LimitStreamError::LimitExceeded) => Either::B(ok({
-                        warn!("incoming request body too large");
-                        hyper::Response::builder()
-                            .status(StatusCode::PAYLOAD_TOO_LARGE)
-                            .body(hyper::Body::from("Payload Too Large"))
-                            .expect("response builder error")
-                    })),
-                    // The packet could not be decoded.
-                    Ok(Err(error)) => Either::B(ok({
-                        warn!("error parsing incoming prepare: error={:?}", error);
-                        hyper::Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .body(hyper::Body::from("Error parsing ILP Prepare"))
-                            .expect("response builder error")
-                    })),
-                }
-            })
+        combinators::collect_http_body(
+            &parts.headers,
+            body,
+            MAX_REQUEST_SIZE
+        )
+        .then(move |chunk_result| {
+            // TODO???
+            // The Result-in-a-Result is awkward, is there a better way?
+            let prepare_result = chunk_result.map(ilp::Prepare::try_from);
+            match prepare_result {
+                Ok(Ok(prepare)) => Either::Left({
+                    next
+                        .call(RequestWithHeaders {
+                            prepare,
+                            headers: parts.headers,
+                        })
+                        .map(make_http_response)
+                        .map(Result::Ok)
+                        //.then(|res_packet| {
+                        //    Ok(make_http_response(res_packet))
+                        //})
+                }),
+                Err(LimitStreamError::StreamError(error)) =>
+                    Either::Right(err(error)),
+                // The incoming request body was too large.
+                Err(LimitStreamError::LimitExceeded) => Either::Right(ok({
+                    warn!("incoming request body too large");
+                    hyper::Response::builder()
+                        .status(StatusCode::PAYLOAD_TOO_LARGE)
+                        .body(hyper::Body::from("Payload Too Large"))
+                        .expect("response builder error")
+                })),
+                // The packet could not be decoded.
+                Ok(Err(error)) => Either::Right(ok({
+                    warn!("error parsing incoming prepare: error={:?}", error);
+                    hyper::Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(hyper::Body::from("Error parsing ILP Prepare"))
+                        .expect("response builder error")
+                })),
+            }
+        })
     }
 }
 
-fn chunk_to_prepare(chunk: hyper::Chunk)
+/*XXX
+fn chunk_to_prepare(buffer: Bytes)
     -> Result<ilp::Prepare, ilp::ParseError>
 {
-    let buffer = Bytes::from(chunk);
-    // `BytesMut::from(chunk)` calls `try_mut`, and only copies the
-    // data if that fails (e.g. if the buffer is `KIND_STATIC`, which
-    // probably only happens in the tests).
-    let buffer = BytesMut::from(buffer);
+    // This used to not copy due to `BytesMut::try_mut`, which was removed in 0.5.
+    // See: <https://github.com/tokio-rs/bytes/issues/368>
+    // Now it copies, unfortunately.
+    let buffer = BytesMut::from(buffer.as_ref());
     ilp::Prepare::try_from(buffer)
 }
+*/
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RequestWithHeaders {
@@ -172,7 +186,8 @@ fn make_http_response(packet: Result<ilp::Fulfill, ilp::Reject>)
 
 #[cfg(test)]
 mod test_receiver {
-    use bytes::BufMut;
+    use bytes::{BufMut, Bytes};
+    use futures::executor::block_on;
 
     use crate::services::RequestWithPeerName;
     use crate::testing::{IlpResult, MockService, PanicService};
@@ -204,7 +219,7 @@ mod test_receiver {
         let next = MockService::new(ilp_response.clone());
         let service = Receiver::new(next);
 
-        let response = service.handle(request).wait().unwrap();
+        let response = block_on(service.handle(request)).unwrap();
         assert_eq!(response.status(), 200);
         assert_eq!(
             response.headers().get("Content-Type").unwrap(),
@@ -221,10 +236,9 @@ mod test_receiver {
             .get("Content-Length").unwrap()
             .to_str().unwrap()
             .parse::<usize>().unwrap();
-        let body = response
-            .into_body()
-            .concat2()
-            .wait().unwrap();
+        let body = block_on({
+            combinators::collect_http_response(response)
+        }).unwrap();
 
         assert_eq!(content_len, body.len());
         assert_eq!(
@@ -239,17 +253,16 @@ mod test_receiver {
     #[test]
     fn test_bad_request() {
         let service = Receiver::new(PanicService);
-        let response = service.handle(
+        let response = block_on(service.handle(
             hyper::Request::post(URI)
                 .body(hyper::Body::from(&b"this is not a prepare"[..]))
                 .unwrap(),
-        ).wait().unwrap();
+        )).unwrap();
         assert_eq!(response.status(), 400);
 
-        let body = response
-            .into_body()
-            .concat2()
-            .wait().unwrap();
+        let body = block_on({
+            combinators::collect_http_response(response)
+        }).unwrap();
         assert_eq!(
             body.as_ref(),
             b"Error parsing ILP Prepare",
@@ -267,7 +280,7 @@ mod test_receiver {
             .header("ILP-Peer-Name", "alice")
             .body(hyper::Body::from(PREPARE.as_ref()))
             .unwrap();
-        let response = service.handle(request).wait().unwrap();
+        let response = block_on(service.handle(request)).unwrap();
         assert_eq!(response.status(), 200);
     }
 
@@ -281,7 +294,7 @@ mod test_receiver {
             data: &{
                 let mut data = BytesMut::with_capacity(MAX_REQUEST_SIZE);
                 for _i in 0..MAX_REQUEST_SIZE {
-                    data.put(b'.');
+                    data.put_u8(b'.');
                 }
                 data
             },
@@ -294,7 +307,7 @@ mod test_receiver {
                 Bytes::from(BytesMut::from(prepare))
             }))
             .unwrap();
-        let response = service.handle(request).wait().unwrap();
+        let response = block_on(service.handle(request)).unwrap();
         assert_eq!(response.status(), 413);
     }
 }

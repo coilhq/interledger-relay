@@ -142,7 +142,7 @@ pub static DATA: &'static [u8] = b"\
 fn make_zero_buffer(size: usize) -> BytesMut {
     let mut buffer = BytesMut::with_capacity(size);
     for _i in 0..size {
-        buffer.put(b'.');
+        buffer.put_u8(b'.');
     }
     buffer
 }

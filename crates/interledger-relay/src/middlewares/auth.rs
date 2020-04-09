@@ -2,11 +2,14 @@ use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use bytes::Bytes;
-use futures::future::{Either, FutureResult, ok};
+use bytes::{Bytes, BytesMut};
+use futures::future::{Either, Ready, ok};
+use futures::task::{Context, Poll};
 use hyper::service::Service as HyperService;
 use log::warn;
 use serde::de::{Deserialize, Deserializer, Error as _};
+
+type HTTPRequest = http::Request<hyper::Body>;
 
 /// Verify that incoming requests have a valid token in the `Authorization` header.
 #[derive(Clone, Debug)]
@@ -17,11 +20,7 @@ pub struct AuthTokenFilter<S> {
 
 impl<S> AuthTokenFilter<S>
 where
-    S: HyperService<
-        ReqBody = hyper::Body,
-        ResBody = hyper::Body,
-        Error = hyper::Error,
-    >,
+    S: HyperService<HTTPRequest>,
 {
     pub fn new<I>(tokens: I, next: S) -> Self
     where
@@ -38,30 +37,35 @@ where
     }
 }
 
-impl<S> HyperService for AuthTokenFilter<S>
+impl<S> HyperService<HTTPRequest> for AuthTokenFilter<S>
 where
     S: HyperService<
-        ReqBody = hyper::Body,
-        ResBody = hyper::Body,
+        HTTPRequest,
+        Response = hyper::Response<hyper::Body>,
         Error = hyper::Error,
     >,
 {
-    type ReqBody = hyper::Body;
-    type ResBody = hyper::Body;
+    type Response = http::Response<hyper::Body>;
     type Error = hyper::Error;
     type Future = Either<
         S::Future,
-        // TODO this Future never fails
-        FutureResult<hyper::Response<hyper::Body>, hyper::Error>,
+        // This Future never fails.
+        Ready<Result<Self::Response, Self::Error>>,
     >;
+
+    fn poll_ready(&mut self, context: &mut Context<'_>)
+        -> Poll<Result<(), Self::Error>>
+    {
+       self.next.poll_ready(context)
+    }
 
     fn call(&mut self, request: hyper::Request<hyper::Body>) -> Self::Future {
         let auth = request.headers().get(hyper::header::AUTHORIZATION);
         match auth {
             Some(token) if self.tokens.contains(token.as_ref()) => {
-                Either::A(self.next.call(request))
+                Either::Left(self.next.call(request))
             },
-            _ => Either::B(ok({
+            _ => Either::Right(ok({
                 warn!("invalid authorization: authorization={:?}", auth);
                 hyper::Response::builder()
                     .status(hyper::StatusCode::UNAUTHORIZED)
@@ -88,8 +92,12 @@ impl AuthToken {
 
     pub fn try_from(bytes: Bytes) -> Result<Self, http::Error> {
         // Verify that the `AuthToken` can be used an an HTTP header value.
-        http::header::HeaderValue::from_shared(bytes.clone())?;
+        http::header::HeaderValue::from_maybe_shared(bytes.clone())?;
         Ok(AuthToken(bytes))
+    }
+
+    pub fn as_bytes(&self) -> Bytes {
+        self.0.clone()
     }
 }
 
@@ -111,14 +119,14 @@ impl<'de> Deserialize<'de> for AuthToken {
         D: Deserializer<'de>,
     {
         let token_str = <&str>::deserialize(deserializer)?;
-        AuthToken::try_from(Bytes::from(token_str))
+        AuthToken::try_from(BytesMut::from(token_str).freeze())
             .map_err(D::Error::custom)
     }
 }
 
 #[cfg(test)]
 mod test_auth_token_filter {
-    use futures::prelude::*;
+    use futures::executor::block_on;
     use hyper::service::service_fn;
 
     use super::*;
@@ -141,45 +149,35 @@ mod test_auth_token_filter {
 
         // Correct token.
         assert_eq!(
-            service
-                .call({
-                    hyper::Request::post("/")
-                        .header("Authorization", "token_1")
-                        .body(hyper::Body::empty())
-                        .unwrap()
-                })
-                .wait()
-                .unwrap()
-                .status(),
+            block_on(service.call({
+                hyper::Request::post("/")
+                    .header("Authorization", "token_1")
+                    .body(hyper::Body::empty())
+                    .unwrap()
+            })).unwrap().status(),
             200,
         );
 
         // No token.
         assert_eq!(
-            service
-                .call({
+            block_on({
+                service.call({
                     hyper::Request::post("/")
                         .body(hyper::Body::empty())
                         .unwrap()
                 })
-                .wait()
-                .unwrap()
-                .status(),
+            }).unwrap().status(),
             401,
         );
 
         // Incorrect token.
         assert_eq!(
-            service
-                .call({
-                    hyper::Request::post("/")
-                        .header("Authorization", "not_a_token")
-                        .body(hyper::Body::empty())
-                        .unwrap()
-                })
-                .wait()
-                .unwrap()
-                .status(),
+            block_on(service.call({
+                hyper::Request::post("/")
+                    .header("Authorization", "not_a_token")
+                    .body(hyper::Body::empty())
+                    .unwrap()
+            })).unwrap().status(),
             401,
         );
     }

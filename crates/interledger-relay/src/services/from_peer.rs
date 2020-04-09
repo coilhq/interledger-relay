@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use futures::future::{Either, FutureResult, err};
+use futures::future::{Either, Ready, err};
 use log::error;
 
 use crate::{AuthToken, Relation, Request, Service};
@@ -43,7 +43,7 @@ where
 {
     type Future = Either<
         S::Future,
-        FutureResult<ilp::Fulfill, ilp::Reject>,
+        Ready<Result<ilp::Fulfill, ilp::Reject>>,
     >;
 
     fn call(self, req: RequestWithHeaders) -> Self::Future {
@@ -61,7 +61,7 @@ where
             Some(peer) => peer,
             None => {
                 error!("could not determine packet source: auth={:?}", auth);
-                return Either::B(err(ilp::RejectBuilder {
+                return Either::Right(err(ilp::RejectBuilder {
                     code: ilp::ErrorCode::F00_BAD_REQUEST,
                     message: b"could not determine packet source",
                     triggered_by: Some(self.address.as_addr()),
@@ -70,7 +70,7 @@ where
             },
         };
 
-        Either::A(self.next.call(RequestFromPeer {
+        Either::Left(self.next.call(RequestFromPeer {
             base: req,
             from_relation: peer.relation,
             from_address: peer.address.clone(),
@@ -133,7 +133,7 @@ impl ConnectorPeer {
 mod test_from_peer_service {
     use std::iter::FromIterator;
 
-    use futures::prelude::*;
+    use futures::executor::block_on;
     use hyper::HeaderMap;
     use lazy_static::lazy_static;
 
@@ -169,10 +169,9 @@ mod test_from_peer_service {
             "invalid_token".parse().unwrap(),
         );
 
-        let reject = service
-            .call(RequestWithHeaders::new(PREPARE.clone(), headers))
-            .wait()
-            .unwrap_err();
+        let reject = block_on({
+            service.call(RequestWithHeaders::new(PREPARE.clone(), headers))
+        }).unwrap_err();
         assert_eq!(reject.code(), ilp::ErrorCode::F00_BAD_REQUEST);
         assert_eq!(reject.message(), &b"could not determine packet source"[..]);
     }
@@ -192,10 +191,9 @@ mod test_from_peer_service {
             "token_1".parse().unwrap(),
         );
 
-        let fulfill = service
-            .call(RequestWithHeaders::new(PREPARE.clone(), headers.clone()))
-            .wait()
-            .unwrap();
+        let fulfill = block_on({
+            service.call(RequestWithHeaders::new(PREPARE.clone(), headers.clone()))
+        }).unwrap();
         assert_eq!(fulfill, *FULFILL);
 
         assert_eq!(

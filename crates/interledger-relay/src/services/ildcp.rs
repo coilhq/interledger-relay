@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use futures::future::{Either, FutureResult, err, ok};
+use futures::future::{Either, Ready, err, ok};
 use log::warn;
 
 use crate::{Relation, Request, Service};
@@ -42,14 +42,14 @@ where
     Req: RequestWithPeerName + RequestWithFrom,
 {
     type Future = Either<
-        FutureResult<ilp::Fulfill, ilp::Reject>,
+        Ready<Result<ilp::Fulfill, ilp::Reject>>,
         S::Future,
     >;
 
     fn call(self, request: Req) -> Self::Future {
         let prepare = request.borrow();
         if prepare.destination() != ildcp::DESTINATION {
-            return Either::B(self.next.call(request));
+            return Either::Right(self.next.call(request));
         }
 
         // TODO use matches!() macro
@@ -60,7 +60,7 @@ where
                     "ildcp request from non-child peer: relation={:?} from_address={:?}",
                     request.from_relation(), request.from_address(),
                 );
-                return Either::A(err(self.make_reject(
+                return Either::Left(err(self.make_reject(
                     ilp::ErrorCode::F00_BAD_REQUEST,
                     b"ILDCP request from non-child peer",
                 )))
@@ -74,7 +74,7 @@ where
                     "ildcp request missing ILP-Peer-Name: from_address={:?}",
                     request.from_address(),
                 );
-                return Either::A(err(self.make_reject(
+                return Either::Left(err(self.make_reject(
                     ilp::ErrorCode::F00_BAD_REQUEST,
                     b"Missing ILP-Peer-Name header",
                 )))
@@ -86,7 +86,7 @@ where
         let client_address = request.from_address().with_suffix(peer_name);
         let client_address = match client_address {
             Ok(addr) => addr,
-            Err(_) => return Either::A(err(self.make_reject(
+            Err(_) => return Either::Left(err(self.make_reject(
                 ilp::ErrorCode::F00_BAD_REQUEST,
                 b"Invalid generated client address",
             ))),
@@ -97,7 +97,7 @@ where
                 .starts_with(self.config.client_address().as_ref())
         });
 
-        Either::A(ok(ildcp::ResponseBuilder {
+        Either::Left(ok(ildcp::ResponseBuilder {
             client_address: client_address.as_addr(),
             asset_scale: self.config.asset_scale(),
             asset_code: self.config.asset_code(),
@@ -109,7 +109,7 @@ where
 mod test_config_service {
     use std::borrow::Borrow;
 
-    use futures::prelude::*;
+    use futures::executor::block_on;
     use lazy_static::lazy_static;
 
     use crate::testing::{FULFILL, MockService, PREPARE};
@@ -147,10 +147,7 @@ mod test_config_service {
     #[test]
     fn test_passthrough() {
         assert_eq!(
-            CONFIG
-                .clone()
-                .call(REQUEST_PREPARE.clone())
-                .wait()
+            block_on(CONFIG.clone().call(REQUEST_PREPARE.clone()))
                 .unwrap(),
             *FULFILL,
         );
@@ -164,10 +161,7 @@ mod test_config_service {
             request
         };
         assert_eq!(
-            CONFIG
-                .clone()
-                .call(request)
-                .wait()
+            block_on(CONFIG.clone().call(request))
                 .unwrap_err()
                 .code(),
             ilp::ErrorCode::F00_BAD_REQUEST,
@@ -182,10 +176,7 @@ mod test_config_service {
             request
         };
         assert_eq!(
-            CONFIG
-                .clone()
-                .call(request)
-                .wait()
+            block_on(CONFIG.clone().call(request))
                 .unwrap_err()
                 .code(),
             ilp::ErrorCode::F00_BAD_REQUEST,
@@ -194,11 +185,9 @@ mod test_config_service {
 
     #[test]
     fn test_ildcp_response() {
-        let fulfill = CONFIG
-            .clone()
-            .call(REQUEST_ILDCP.clone())
-            .wait()
-            .unwrap();
+        let fulfill = block_on({
+            CONFIG.clone().call(REQUEST_ILDCP.clone())
+        }).unwrap();
         let response = ildcp::Response::try_from(fulfill).unwrap();
         assert_eq!(
             response.client_address(),

@@ -1,7 +1,7 @@
 use std::io;
 use std::time;
 
-use futures::future::{Either, FutureResult, err};
+use futures::future::{Either, Ready, err};
 
 use crate::{Request, Service};
 use ilp::oer::BufOerExt;
@@ -29,21 +29,21 @@ where
     Req: Request,
 {
     type Future = Either<
-        FutureResult<ilp::Fulfill, ilp::Reject>,
+        Ready<Result<ilp::Fulfill, ilp::Reject>>,
         S::Future,
     >;
 
     fn call(self, request: Req) -> Self::Future {
         let incoming_prepare = request.borrow();
         if self.address.as_addr() != incoming_prepare.destination() {
-            return Either::B(self.next.call(request.into()));
+            return Either::Right(self.next.call(request.into()));
         }
 
         // TODO should this be validated to prevent loops/DOS?
         let from_addr = deserialize_echo_request(incoming_prepare.data());
         let from_addr = match from_addr {
             Ok(addr) => addr,
-            Err(_) => return Either::A(err(ilp::RejectBuilder {
+            Err(_) => return Either::Left(err(ilp::RejectBuilder {
                 code: ilp::ErrorCode::F01_INVALID_PACKET,
                 message: b"invalid echo request",
                 triggered_by: Some(self.address.as_addr()),
@@ -64,7 +64,7 @@ where
             destination: from_addr,
             data: ECHO_RESPONSE,
         }.build();
-        Either::B(self.next.call(outgoing_prepare))
+        Either::Right(self.next.call(outgoing_prepare))
     }
 }
 
@@ -88,7 +88,7 @@ fn deserialize_echo_request(mut reader: &[u8])
 #[cfg(test)]
 mod test_echo_service {
     use bytes::{BufMut, BytesMut};
-    use futures::prelude::*;
+    use futures::executor::block_on;
     use lazy_static::lazy_static;
 
     use crate::testing::{ADDRESS, FULFILL, MockService, PanicService, PREPARE};
@@ -122,9 +122,7 @@ mod test_echo_service {
         let receiver = MockService::new(Ok(FULFILL.clone()));
         let echo = EchoService::new(ADDRESS.to_address(), receiver.clone());
 
-        let fulfill = echo.call(PREPARE.clone())
-            .wait()
-            .unwrap();
+        let fulfill = block_on(echo.call(PREPARE.clone())).unwrap();
         assert_eq!(fulfill, FULFILL.clone());
         assert_eq!(
             receiver
@@ -139,9 +137,7 @@ mod test_echo_service {
         let receiver = MockService::new(Ok(FULFILL.clone()));
         let echo = EchoService::new(ADDRESS.to_address(), receiver.clone());
 
-        let fulfill = echo.call(ECHO_PREPARE.build())
-            .wait()
-            .unwrap();
+        let fulfill = block_on(echo.call(ECHO_PREPARE.build())).unwrap();
         assert_eq!(fulfill, FULFILL.clone());
 
         let echo_response = receiver
@@ -162,9 +158,7 @@ mod test_echo_service {
     #[test]
     fn test_invalid_echo_request() {
         let echo = EchoService::new(ADDRESS.to_address(), PanicService);
-        let reject = echo.call(INVALID_ECHO_PREPARE.build())
-            .wait()
-            .unwrap_err();
+        let reject = block_on(echo.call(INVALID_ECHO_PREPARE.build())).unwrap_err();
         assert_eq!(reject.code(), ilp::ErrorCode::F01_INVALID_PACKET);
     }
 

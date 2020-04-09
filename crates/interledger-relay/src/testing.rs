@@ -1,16 +1,15 @@
 //! Test helpers, mocks, and fixtures.
 
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
-use futures::future::FutureResult;
 use futures::prelude::*;
 use hyper::Uri;
 use lazy_static::lazy_static;
-use tokio::runtime::Runtime;
-use tokio::timer::Delay;
 
+use crate::combinators;
 use crate::{AuthToken, NextHop, Request, Service, StaticRoute};
 
 const EXPIRES_IN: Duration = Duration::from_secs(20);
@@ -133,14 +132,14 @@ impl<Req> Service<Req> for MockService<Req>
 where
     Req: Request + Clone,
 {
-    type Future = FutureResult<ilp::Fulfill, ilp::Reject>;
+    type Future = future::Ready<Result<ilp::Fulfill, ilp::Reject>>;
 
     fn call(self, request: Req) -> Self::Future {
         self.requests
             .write()
             .unwrap()
             .push(request);
-        self.response.as_ref().clone().into()
+        future::ready(self.response.as_ref().clone())
     }
 }
 
@@ -162,18 +161,14 @@ where
     S: Service<Req> + Send + 'static,
     Req: Request + Send + 'static,
 {
-    type Future = Box<dyn Future<
-        Item = ilp::Fulfill,
-        Error = ilp::Reject,
-    > + 'static + Send>;
+    type Future = Pin<Box<dyn Future<
+        Output = Result<ilp::Fulfill, ilp::Reject>,
+    > + 'static + Send>>;
 
     fn call(self, request: Req) -> Self::Future {
-        let future = Delay::new(Instant::now() + self.delay)
-            .then(move |result| {
-                result.expect("delay error");
-                self.next.call(request)
-            });
-        Box::new(future)
+        let future = tokio::time::delay_for(self.delay)
+            .then(move |_| self.next.call(request));
+        Box::pin(future)
     }
 }
 
@@ -182,10 +177,9 @@ where
 pub struct PanicService;
 
 impl<Req: Request> Service<Req> for PanicService {
-    type Future = Box<dyn Future<
-        Item = ilp::Fulfill,
-        Error = ilp::Reject,
-    > + Send + 'static>;
+    type Future = Pin<Box<dyn Future<
+        Output = Result<ilp::Fulfill, ilp::Reject>,
+    > + Send + 'static>>;
 
     fn call(self, request: Req) -> Self::Future {
         panic!("PanicService received prepare={:?}", request.borrow());
@@ -199,7 +193,7 @@ lazy_static! {
 #[derive(Clone)]
 pub struct MockServer {
     test_request: fn(&hyper::Request<hyper::Body>),
-    test_body: fn(hyper::Chunk),
+    test_body: fn(Bytes),
     /// An error variant indicates the response should abort the connection.
     make_response: Result<
         fn() -> hyper::Response<hyper::Body>,
@@ -226,7 +220,7 @@ impl MockServer {
     }
 
     /// Test the incoming request body.
-    pub fn test_body(mut self, test: fn(hyper::Chunk)) -> Self {
+    pub fn test_body(mut self, test: fn(Bytes)) -> Self {
         self.test_body = test;
         self
     }
@@ -247,37 +241,43 @@ impl MockServer {
 
     pub fn run<Test>(self, run: Test)
     where
-        Test: 'static + Future<Item = ()> + Send,
+        Test: 'static + Future<Output = ()> + Send,
     {
         // Ensure that parallel tests don't fight over the server port.
         let _guard = SERVER_MUTEX.lock().unwrap();
 
-        let receiver = hyper::Server::bind(&RECEIVER_ADDR.into())
-            .serve(move || {
-                // The cloning is a bit of a mess, but seems to be necessary
-                // to untangle the closure lifetimes.
-                let mock = self.clone();
+        let make_svc = hyper::service::make_service_fn(move |_socket| {
+            // The cloning is a bit of a mess, but seems to be necessary
+            // to untangle the closure lifetimes.
+            let mock = self.clone();
+            future::ok::<_, std::convert::Infallible>({
+                // TODO async
                 hyper::service::service_fn(move |req| {
                     let mock = mock.clone();
                     (mock.test_request)(&req);
-                    req.into_body()
-                        .concat2()
-                        .then(move |body_result| {
-                            (mock.test_body)(body_result.unwrap());
-                            match mock.make_response {
-                                Ok(make_resp) => Ok(make_resp()),
-                                Err(_) => Err("abort!"),
-                            }
-                        })
+                    combinators::collect_http_request(req).map(move |body_result| {
+                        let body_buffer = body_result.unwrap().freeze();
+                        (mock.test_body)(body_buffer);
+                        match mock.make_response {
+                            Ok(make_resp) => Ok(make_resp()),
+                            Err(_) => Err("abort!"),
+                        }
+                    })
                 })
             })
-            .with_graceful_shutdown(run)
-            .map_err(|err| { panic!("server error: {}", err) });
+        });
 
-        let mut rt = Runtime::new().unwrap();
-        rt.block_on(receiver).unwrap();
-        rt.shutdown_now()
-            .wait()
+        tokio::runtime::Builder::new()
+            .enable_all()
+            .threaded_scheduler()
+            .build()
             .unwrap()
+            .block_on(async move {
+                hyper::Server::bind(&RECEIVER_ADDR.into())
+                    .serve(make_svc)
+                    .with_graceful_shutdown(run)
+                    .await
+                    .unwrap()
+            });
     }
 }

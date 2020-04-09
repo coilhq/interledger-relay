@@ -10,37 +10,35 @@ quick_error! {
     pub enum ParseError {
         Io(err: std::io::Error) {
             from()
-            description(err.description())
+            display("Io {}", err)
             cause(err)
         }
         Utf8(err: Utf8Error) {
             from()
-            description(err.description())
+            display("Utf8 {}", err)
             cause(err)
         }
         FromUtf8(err: FromUtf8Error) {
             from()
-            description(err.description())
+            display("FromUtf8 {}", err)
             cause(err)
         }
         Chrono(err: chrono::ParseError) {
             from()
-            description(err.description())
+            display("Chrono {}", err)
             cause(err)
         }
         WrongType(descr: String) {
-            description(descr)
-            display("Wrong Type {}", descr)
+            display("WrongType {}", descr)
         }
         AddressError(err: AddressError) {
             from()
-            description(err.description())
+            display("AddressError {}", err)
             cause(err)
         }
         // TODO &'static str instead of String?
         InvalidPacket(descr: String) {
-            description(descr)
-            display("Invalid Packet {}", descr)
+            display("InvalidPacket {}", descr)
         }
     }
 }

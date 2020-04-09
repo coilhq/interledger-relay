@@ -1,5 +1,6 @@
 [workspace]
 
 members = [
+  "./crates/interledger-packet",
   "./crates/interledger-relay",
 ]

@@ -1,3 +1,4 @@
+use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use bytes::Bytes;
@@ -25,15 +26,14 @@ impl<Req> Service<Req> for RouterService
 where
     Req: Request,
 {
-    type Future = Box<
+    type Future = Pin<Box<
         dyn Future<
-            Item = ilp::Fulfill,
-            Error = ilp::Reject,
+            Output = Result<ilp::Fulfill, ilp::Reject>,
         > + Send + 'static,
-    >;
+    >>;
 
     fn call(self, request: Req) -> Self::Future {
-        Box::new(self.forward(request.into()))
+        Box::pin(self.forward(request.into()))
     }
 }
 
@@ -55,7 +55,7 @@ impl RouterService {
     }
 
     fn forward(self, prepare: ilp::Prepare)
-        -> impl Future<Item = ilp::Fulfill, Error = ilp::Reject>
+        -> impl Future<Output = Result<ilp::Fulfill, ilp::Reject>>
     {
         let routes = self.data.routes.read().unwrap();
         let (route_index, route) = match routes.resolve(prepare.destination()) {
@@ -65,7 +65,7 @@ impl RouterService {
                     "no route exists: destination=\"{}\"",
                     prepare.destination(),
                 );
-                return Either::B(err(self.make_reject(
+                return Either::Right(err(self.make_reject(
                     ilp::ErrorCode::F02_UNREACHABLE,
                     b"no route exists",
                 )));
@@ -75,7 +75,7 @@ impl RouterService {
                     "no healthy route found: destination=\"{}\"",
                     prepare.destination(),
                 );
-                return Either::B(err(self.make_reject(
+                return Either::Right(err(self.make_reject(
                     ilp::ErrorCode::T01_PEER_UNREACHABLE,
                     b"no healthy route found",
                 )));
@@ -91,7 +91,7 @@ impl RouterService {
             Ok(uri) => uri,
             Err(error) => {
                 warn!("error generating endpoint: error={}", error);
-                return Either::B(err(self.make_reject(
+                return Either::Right(err(self.make_reject(
                     ilp::ErrorCode::F02_UNREACHABLE,
                     b"invalid address segment",
                 )))
@@ -110,19 +110,20 @@ impl RouterService {
                 auth,
                 peer_name: None,
             }, prepare)
-            .then(move |result| {
+            //.then(move |result| {
+            .inspect(move |result| {
                 if has_failover {
                     let is_success =
-                        response_is_ok(service_data.address.as_addr(), &result);
+                        response_is_ok(service_data.address.as_addr(), result);
                     service_data.routes
                         .read()
                         .unwrap()
                         .update(route_index, is_success)
                 }
-                result
+                //result
             });
 
-        Either::A(do_request)
+        Either::Left(do_request)
     }
 
     fn make_reject(&self, code: ilp::ErrorCode, message: &[u8]) -> ilp::Reject {
@@ -195,9 +196,8 @@ mod test_router_service {
             .run({
                 ROUTER.clone()
                     .call(testing::PREPARE.clone())
-                    .then(|result| -> Result<(), ()> {
+                    .map(|result| {
                         assert_eq!(result.unwrap(), *testing::FULFILL);
-                        Ok(())
                     })
             });
     }
@@ -226,12 +226,11 @@ mod test_router_service {
             .run({
                 router.clone()
                     .call(testing::PREPARE.clone())
-                    .then(move |result| -> Result<(), ()> {
+                    .map(move |result| {
                         assert!(result.is_err());
                         let routes = router.data.routes.read().unwrap();
                         let route = &routes.as_ref()[0];
                         assert_eq!(route.is_available(), false);
-                        Ok(())
                     })
             });
     }
@@ -256,9 +255,8 @@ mod test_router_service {
             .run({
                 ROUTER.clone()
                     .call(testing::PREPARE_MULTILATERAL.clone())
-                    .then(|result| -> Result<(), ()> {
+                    .map(|result| {
                         assert_eq!(result.unwrap(), *testing::FULFILL);
-                        Ok(())
                     })
             });
     }
@@ -278,9 +276,8 @@ mod test_router_service {
         testing::MockServer::new().run({
             router
                 .call(testing::PREPARE.clone())
-                .then(move |result| -> Result<(), ()> {
+                .map(move |result| {
                     assert_eq!(result.unwrap_err(), expect_reject);
-                    Ok(())
                 })
         });
     }
@@ -310,9 +307,8 @@ mod test_router_service {
             .run({
                 router
                     .call(testing::PREPARE.clone())
-                    .then(|result| -> Result<(), ()> {
+                    .map(|result| {
                         assert_eq!(result.unwrap(), *testing::FULFILL);
-                        Ok(())
                     })
             });
     }

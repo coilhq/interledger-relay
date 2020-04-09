@@ -1,9 +1,8 @@
-use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::error;
 use std::fmt;
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::future::{Either, ok};
 use futures::prelude::*;
 use hyper::Uri;
@@ -53,14 +52,14 @@ pub enum RelationConfig {
 
 impl ConnectorRoot {
     pub(crate) fn load_config(&self)
-        -> impl Future<Item = ildcp::Response, Error = SetupError>
+        -> impl Future<Output = Result<ildcp::Response, SetupError>>
     {
         match self {
             ConnectorRoot::Static {
                 address,
                 asset_code,
                 asset_scale,
-            } => Either::A(ok(ildcp::ResponseBuilder {
+            } => Either::Left(ok(ildcp::ResponseBuilder {
                 client_address: address.as_addr(),
                 asset_code: asset_code.as_bytes(),
                 asset_scale: *asset_scale,
@@ -69,17 +68,17 @@ impl ConnectorRoot {
                 parent_endpoint,
                 parent_auth,
                 name,
-            } => Either::B(fetch_ildcp(
+            } => Either::Right(fetch_ildcp(
                 parent_endpoint,
-                parent_auth.borrow(),
+                parent_auth.as_bytes(),
                 name.as_bytes(),
             )),
         }
     }
 }
 
-fn fetch_ildcp(endpoint: &Uri, auth: &[u8], peer_name: &[u8])
-    -> impl Future<Item = ildcp::Response, Error = SetupError>
+fn fetch_ildcp(endpoint: &Uri, auth: Bytes, peer_name: &[u8])
+    -> impl Future<Output = Result<ildcp::Response, SetupError>>
 {
     let prepare = ildcp::Request::new().to_prepare();
 
@@ -89,14 +88,13 @@ fn fetch_ildcp(endpoint: &Uri, auth: &[u8], peer_name: &[u8])
         .request(RequestOptions {
             method: hyper::Method::POST,
             uri: endpoint.clone(),
-            auth: Some(Bytes::from(auth)),
-            peer_name: Some(Bytes::from(peer_name)),
+            auth: Some(auth),
+            peer_name: Some(BytesMut::from(peer_name).freeze()),
         }, prepare)
-        .from_err()
+        .err_into()
         .and_then(|fulfill| {
-            ildcp::Response::try_from(fulfill)
-                .into_future()
-                .from_err()
+            future::ready(ildcp::Response::try_from(fulfill))
+                .err_into()
         })
 }
 
@@ -189,7 +187,7 @@ impl From<ilp::Reject> for SetupError {
 
 #[cfg(test)]
 mod test_connector_root {
-    use bytes::{Bytes, BytesMut};
+    use bytes::BytesMut;
 
     use crate::testing::{self, RECEIVER_ORIGIN};
     use super::*;
@@ -202,7 +200,7 @@ mod test_connector_root {
             asset_code: "XRP".to_owned(),
         };
         assert_eq!(
-            root.load_config().wait().unwrap(),
+            futures::executor::block_on(root.load_config()).unwrap(),
             ildcp::ResponseBuilder {
                 client_address: ilp::Addr::new(b"test.alice"),
                 asset_scale: 9,
@@ -229,7 +227,8 @@ mod test_connector_root {
             };
 
         let load_config = root.load_config()
-            .map(|response| {
+            .map(|response_result| {
+                let response = response_result.unwrap();
                 assert_eq!(response, PARENT_RESPONSE.build());
             });
 
@@ -246,8 +245,7 @@ mod test_connector_root {
                 );
             })
             .test_body(|body| {
-                let body = Bytes::from(body);
-                let body = BytesMut::from(body);
+                let body = BytesMut::from(body.as_ref());
                 let prepare = ilp::Prepare::try_from(body).unwrap();
                 ildcp::Request::try_from(prepare)
                     .expect("invalid ildcp request");

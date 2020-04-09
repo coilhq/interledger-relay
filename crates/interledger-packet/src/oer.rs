@@ -3,8 +3,8 @@
 use std::io::{Error, ErrorKind, Result};
 use std::u64;
 
-use byteorder::{BigEndian, ReadBytesExt};
-use bytes::{Buf, BufMut, BytesMut, IntoBuf};
+use byteorder::{BigEndian, ByteOrder, ReadBytesExt};
+use bytes::{Buf, BufMut, BytesMut};
 
 const HIGH_BIT: u8 = 0x80;
 const LOWER_SEVEN_BITS: u8 = 0x7f;
@@ -105,7 +105,14 @@ impl<'a> BufOerExt<'a> for &'a [u8] {
         if length & HIGH_BIT != 0 {
             let length_prefix_length = (length & LOWER_SEVEN_BITS) as usize;
             // TODO check for canonical length
-            Ok(self.read_uint::<BigEndian>(length_prefix_length)? as usize)
+            if length_prefix_length > 8 {
+                Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "length prefix too large",
+                ))
+            } else {
+                Ok(self.read_uint::<BigEndian>(length_prefix_length)? as usize)
+            }
         } else {
             Ok(length as usize)
         }
@@ -117,6 +124,8 @@ impl<'a> BufOerExt<'a> for &'a [u8] {
         let size = self.read_var_octet_string_length()?;
         if size == 0 {
             Err(Error::new(ErrorKind::InvalidData, "zero-length VarUInt"))
+        } else if size > 8 {
+            Err(Error::new(ErrorKind::InvalidData, "VarUInt too large"))
         } else {
             Ok(self.read_uint::<BigEndian>(size)?)
         }
@@ -128,9 +137,9 @@ pub trait MutBufOerExt: BufMut + Sized {
     #[inline]
     fn put_var_octet_string<B>(&mut self, buf: B)
     where
-        B: IntoBuf,
+        B: Buf,
     {
-        let buf = buf.into_buf();
+        //let buf = buf.into_buf();
         self.put_var_octet_string_length(buf.remaining());
         self.put(buf);
     }
@@ -153,6 +162,20 @@ pub trait MutBufOerExt: BufMut + Sized {
         let size = predict_var_uint_size(uint);
         self.put_var_octet_string_length(size);
         self.put_uint_be(uint, size);
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    fn put_uint_be(&mut self, value: u64, size: usize) {
+        let mut data = [0x00_u8; 8];
+        BigEndian::write_u64(&mut data, value);
+        self.put(&data[(8 - size)..]);
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    fn put_u64_be(&mut self, value: u64) {
+        self.put_uint_be(value, 8);
     }
 }
 
@@ -299,6 +322,16 @@ mod test_buf_oer_ext {
     }
 
     #[test]
+    fn test_read_var_octet_string_length() {
+        // The length of the octet string fits in 9 bytes, which is too big.
+        let mut too_big: &[u8] = &[HIGH_BIT | 0x09];
+        assert_eq!(
+            too_big.read_var_octet_string_length().unwrap_err().kind(),
+            ErrorKind::InvalidData,
+        );
+    }
+
+    #[test]
     fn test_read_var_uint() {
         let tests: &[(Vec<u8>, u64, usize)] = &[
             (vec![0x01, 0x00], 0, 2),
@@ -337,6 +370,11 @@ mod test_buf_oer_ext {
             (vec![0x04], ErrorKind::UnexpectedEof),
             // Enough bytes must be present.
             (vec![0x04, 0x01, 0x02, 0x03], ErrorKind::UnexpectedEof),
+            // Too many bytes.
+            (
+                vec![0x09, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09],
+                ErrorKind::InvalidData,
+            ),
         ];
 
         for (buffer, error_kind) in tests {
@@ -371,7 +409,7 @@ mod buf_mut_oer_ext {
 
         for (varstr, buffer) in tests {
             let mut writer = Vec::new();
-            writer.put_var_octet_string(varstr);
+            writer.put_var_octet_string(*varstr);
             assert_eq!(&writer[..], *buffer);
         }
     }

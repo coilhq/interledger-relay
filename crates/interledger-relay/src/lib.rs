@@ -19,10 +19,8 @@ pub use self::services::{DebugServiceOptions, NextHop, RouteFailover, RoutingTab
 // TODO support auth header "Bearer: " prefix
 
 pub trait Service<Req: Request>: Clone {
-    type Future: 'static + Send + Future<
-        Item = ilp::Fulfill,
-        Error = ilp::Reject,
-    >;
+    type Future: 'static + Send
+        + Future<Output = Result<ilp::Fulfill, ilp::Reject>>;
 
     fn call(self, request: Req) -> Self::Future;
 }
@@ -43,10 +41,7 @@ impl<F, Req, Res> Service<Req> for F
 where
     F: Clone + Fn(Req) -> Res,
     Req: Request,
-    Res: 'static + Send + Future<
-        Item = ilp::Fulfill,
-        Error = ilp::Reject,
-    >,
+    Res: 'static + Send + Future<Output = Result<ilp::Fulfill, ilp::Reject>>,
 {
     type Future = Res;
 

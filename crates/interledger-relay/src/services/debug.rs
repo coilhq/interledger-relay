@@ -1,3 +1,5 @@
+use std::pin::Pin;
+
 use futures::prelude::*;
 use log::debug;
 use serde::Deserialize;
@@ -36,12 +38,11 @@ where
     S: 'static + Service<Req> + Send,
     Req: Request,
 {
-    type Future = Box<
+    type Future = Pin<Box<
         dyn Future<
-            Item = ilp::Fulfill,
-            Error = ilp::Reject,
+            Output = Result<ilp::Fulfill, ilp::Reject>,
         > + Send + 'static,
-    >;
+    >>;
 
     fn call(self, request: Req) -> Self::Future {
         let prefix = self.prefix;
@@ -50,9 +51,9 @@ where
             debug!("{}: {:?}", prefix, request.borrow());
         }
 
-        Box::new(self.next.call(request)
-            .then(move |response| {
-                match &response {
+        Box::pin(self.next.call(request)
+            .inspect(move |response| {
+                match response {
                     Ok(fulfill) => if options.log_fulfill {
                         debug!("{}: {:?}", prefix, fulfill)
                     },
@@ -60,7 +61,6 @@ where
                         debug!("{}: {:?}", prefix, reject)
                     },
                 }
-                response
             }))
     }
 }

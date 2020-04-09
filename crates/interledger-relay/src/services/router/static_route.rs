@@ -3,8 +3,7 @@ use std::fmt;
 use std::time;
 
 use bytes::{BufMut, Bytes, BytesMut};
-use http::HttpTryFrom;
-use http::uri::InvalidUriBytes;
+use http::uri::InvalidUri;
 use hyper::Uri;
 use serde::Deserialize;
 
@@ -94,7 +93,8 @@ impl StaticRoute {
                 uri.put_slice(endpoint_prefix);
                 uri.put_slice(destination_segment);
                 uri.put_slice(endpoint_suffix);
-                Ok(Uri::try_from(uri.freeze())?)
+                //Ok(Uri::try_from(uri.freeze())?)
+                Ok(Uri::from_maybe_shared(uri.freeze())?)
             },
         }
     }
@@ -114,14 +114,14 @@ pub struct RouterError(ErrorKind);
 #[derive(Debug)]
 enum ErrorKind {
     InvalidDestination,
-    InvalidUriBytes(InvalidUriBytes),
+    InvalidUri(InvalidUri),
 }
 
 impl error::Error for RouterError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match &self.0 {
             ErrorKind::InvalidDestination => None,
-            ErrorKind::InvalidUriBytes(inner) => Some(inner),
+            ErrorKind::InvalidUri(inner) => Some(inner),
         }
     }
 }
@@ -130,14 +130,14 @@ impl fmt::Display for RouterError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self.0 {
             ErrorKind::InvalidDestination => "InvalidDestination",
-            ErrorKind::InvalidUriBytes(_) => "InvalidUriBytes",
+            ErrorKind::InvalidUri(_) => "InvalidUri",
         })
     }
 }
 
-impl From<InvalidUriBytes> for RouterError {
-    fn from(inner: InvalidUriBytes) -> Self {
-        RouterError(ErrorKind::InvalidUriBytes(inner))
+impl From<InvalidUri> for RouterError {
+    fn from(inner: InvalidUri) -> Self {
+        RouterError(ErrorKind::InvalidUri(inner))
     }
 }
 

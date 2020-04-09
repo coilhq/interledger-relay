@@ -2,14 +2,14 @@ use std::str;
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
-use futures::future::{Either, err, ok};
+use futures::future::{Either, err, ok, ready};
 use futures::prelude::*;
 use hyper::{Response, StatusCode};
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
 use log::warn;
 
-use crate::combinators::LimitStream;
+use crate::combinators;
 
 type HyperClient = hyper::Client<HttpsConnector<HttpConnector>, hyper::Body>;
 
@@ -40,27 +40,36 @@ pub struct RequestOptions {
 }
 
 impl RequestOptions {
-    fn build(&self, prepare: Bytes) -> hyper::Request<hyper::Body> {
-        let mut builder = hyper::Request::builder();
-        builder.method(self.method.clone());
-        builder.uri(&self.uri);
+    // This _shouldn't_ ever return an error.
+    fn build(&self, prepare: Bytes)
+        -> Result<hyper::Request<hyper::Body>, hyper::header::InvalidHeaderValue>
+    {
+        use hyper::header::HeaderValue;
+        let mut builder = hyper::Request::builder()
+            .method(self.method.clone())
+            .uri(&self.uri);
         if let Some(auth) = &self.auth {
-            builder.header(hyper::header::AUTHORIZATION, auth.clone());
+            builder = builder.header(
+                hyper::header::AUTHORIZATION,
+                HeaderValue::from_maybe_shared(auth.clone())?,
+            );
         }
         if let Some(peer_name) = &self.peer_name {
-            builder.header("ILP-Peer-Name", peer_name.clone());
+            builder = builder.header(
+                "ILP-Peer-Name",
+                HeaderValue::from_maybe_shared(peer_name.clone())?,
+            );
         }
-        builder
+        Ok(builder
             .header(hyper::header::CONTENT_TYPE, OCTET_STREAM)
             .body(hyper::Body::from(prepare))
-            .expect("RequestOptions::build error")
+            .expect("RequestOptions::build error"))
     }
 }
 
 impl Client {
     pub fn new(address: ilp::Address) -> Self {
-        let agent = hyper_tls::HttpsConnector::new(4)
-            .expect("TLS initialization failed");
+        let agent = hyper_tls::HttpsConnector::new();
         let client = hyper::Client::builder().build(agent);
         Client::new_with_client(address, client)
     }
@@ -80,63 +89,76 @@ impl Client {
     /// The URI and method should be set, along with extra headers.
     /// `Content-Type` and `Content-Length` should not be set.
     pub fn request(self, req_opts: RequestOptions, prepare: ilp::Prepare)
-        -> impl Future<Item = ilp::Fulfill, Error = ilp::Reject>
+        -> impl Future<Output = Result<ilp::Fulfill, ilp::Reject>>
     {
         let prepare_bytes = BytesMut::from(prepare).freeze();
         let prepare_bytes2 = prepare_bytes.clone();
         let uri = req_opts.uri.clone();
         let hyper = Arc::clone(&self.hyper);
 
-        self.hyper
-            .request(req_opts.build(prepare_bytes.clone()))
-            .and_then(move |res| {
+        let request =
+            match req_opts.build(prepare_bytes.clone()) {
+                Ok(request) => request,
+                Err(_error) => return Either::Right(err({
+                    self.make_invalid_header_value_reject()
+                })),
+            };
+        // TODO await!
+        Either::Left(self.hyper
+            .request(request)
+            .and_then(move |response| {
                 // When the first attempt to send the packet failed with a 502,
                 // retry once. The 502 is probably caused by the hidden request/
                 // connection limit described in <https://github.com/interledgerjs/ilp-plugin-http/pull/3>.
-                if res.status() == hyper::StatusCode::BAD_GATEWAY {
+                if response.status() == hyper::StatusCode::BAD_GATEWAY {
                     warn!(
                         "remote error; retrying: uri=\"{}\" status={:?}",
-                        req_opts.uri, res.status(),
+                        req_opts.uri, response.status(),
                     );
-                    Either::B(hyper.request(req_opts.build(prepare_bytes2)))
+                    // TODO don't unwrap
+                    let request = req_opts.build(prepare_bytes2).unwrap();
+                    Either::Left(hyper.request(request))
                 } else {
-                    Either::A(ok(res))
+                    Either::Right(ok(response))
                 }
             })
-            .then(move |res| match res {
-                Ok(res) => Either::A(self.decode_http_response(uri, res, prepare_bytes)),
+            .then(move |response| match response {
+                Ok(response) => Either::Left({
+                    self.decode_http_response(uri, response, prepare_bytes)
+                }),
                 Err(error) => {
                     warn!(
                         "outgoing connection error: uri=\"{}\" error=\"{}\"",
                         uri, error,
                     );
-                    Either::B(err(self.make_reject(
+                    Either::Right(err(self.make_reject(
                         ilp::ErrorCode::T01_PEER_UNREACHABLE,
                         b"peer connection error",
                     )))
                 },
-            })
+            }))
     }
 
     fn decode_http_response(
         self,
         uri: hyper::Uri,
-        res: Response<hyper::Body>,
+        response: Response<hyper::Body>,
         prepare: Bytes,
-    ) -> impl Future<Item = ilp::Fulfill, Error = ilp::Reject> {
-        let status = res.status();
-        let res_body = LimitStream::new(MAX_RESPONSE_SIZE, res.into_body());
+    ) -> impl Future<Output = Result<ilp::Fulfill, ilp::Reject>> {
+        let status = response.status();
+        let (parts, body) = response.into_parts();
+        let res_body =
+            combinators::collect_http_body(&parts.headers, body, MAX_RESPONSE_SIZE);
         // TODO timeout if response takes too long?
-        // TODO use content-length to hint buffer size?
-        res_body.concat2().then(move |body| {
+        res_body.then(move |body| {
             let body = match body {
-                Ok(body) => Bytes::from(body),
+                Ok(body) => body,
                 Err(error) => {
                     warn!(
                         "remote response body error: uri=\"{}\" error={:?}",
                         uri, error,
                     );
-                    return Either::B(err(self.make_reject(
+                    return Either::Right(err(self.make_reject(
                         ilp::ErrorCode::T00_INTERNAL_ERROR,
                         b"invalid response body from peer",
                     )));
@@ -145,7 +167,7 @@ impl Client {
 
             if status == StatusCode::OK {
                 let body = BytesMut::from(body);
-                return Either::A(self.decode_response(uri, body).into_future());
+                return Either::Left(ready(self.decode_response(uri, body)));
             }
 
             const TRUNCATE_BODY: usize = 32;
@@ -158,7 +180,7 @@ impl Client {
                     "remote client error: uri=\"{}\" status={:?} body={:?} prepare={:?}",
                     uri, status, body_str, prepare_str,
                 );
-                Either::B(err(self.make_reject(
+                Either::Right(err(self.make_reject(
                     ilp::ErrorCode::F00_BAD_REQUEST,
                     b"bad request to peer",
                 )))
@@ -167,7 +189,7 @@ impl Client {
                     "remote server error: uri=\"{}\" status={:?} body={:?} prepare={:?}",
                     uri, status, body_str, prepare_str,
                 );
-                Either::B(err(self.make_reject(
+                Either::Right(err(self.make_reject(
                     ilp::ErrorCode::T01_PEER_UNREACHABLE,
                     b"peer internal error",
                 )))
@@ -176,7 +198,7 @@ impl Client {
                     "unexpected status code: uri=\"{}\" status={:?} body={:?} prepare={:?}",
                     uri, status, body_str, prepare_str,
                 );
-                Either::B(err(self.make_reject(
+                Either::Right(err(self.make_reject(
                     ilp::ErrorCode::T00_INTERNAL_ERROR,
                     b"unexpected response code from peer",
                 )))
@@ -208,6 +230,10 @@ impl Client {
             data: b"",
         }.build()
     }
+
+    fn make_invalid_header_value_reject(&self) -> ilp::Reject {
+        self.make_reject(ilp::ErrorCode::F00_BAD_REQUEST, b"invalid header value")
+    }
 }
 
 fn truncate(string: &str, size: usize) -> &str {
@@ -236,7 +262,7 @@ mod tests {
             ADDRESS.to_address(),
             hyper::Client::builder()
                 .http2_only(true)
-                .build(hyper_tls::HttpsConnector::new(4).unwrap()),
+                .build(hyper_tls::HttpsConnector::new()),
         );
 
         static ref REQUEST_OPTIONS: RequestOptions = RequestOptions {
@@ -278,9 +304,8 @@ mod tests {
             .run({
                 CLIENT.clone()
                     .request(REQUEST_OPTIONS.clone(), testing::PREPARE.clone())
-                    .then(|result| -> Result<(), ()> {
+                    .map(|result| {
                         assert_eq!(result.unwrap(), *testing::FULFILL);
-                        Ok(())
                     })
             });
     }
@@ -300,9 +325,8 @@ mod tests {
             .run({
                 CLIENT_HTTP2.clone()
                     .request(REQUEST_OPTIONS.clone(), testing::PREPARE.clone())
-                    .then(|result| -> Result<(), ()> {
+                    .map(|result| {
                         assert_eq!(result.unwrap(), *testing::FULFILL);
-                        Ok(())
                     })
             });
     }
@@ -319,9 +343,8 @@ mod tests {
             .run({
                 CLIENT.clone()
                     .request(REQUEST_OPTIONS.clone(), testing::PREPARE.clone())
-                    .then(|result| -> Result<(), ()> {
+                    .map(|result| {
                         assert_eq!(result.unwrap_err(), *testing::REJECT);
-                        Ok(())
                     })
             });
     }
@@ -344,9 +367,8 @@ mod tests {
             .run({
                 CLIENT.clone()
                     .request(REQUEST_OPTIONS.clone(), testing::PREPARE.clone())
-                    .then(move |result| -> Result<(), ()> {
+                    .map(move |result| {
                         assert_eq!(result.unwrap_err(), expect_reject);
-                        Ok(())
                     })
             });
     }
@@ -377,9 +399,8 @@ mod tests {
                     .run({
                         CLIENT.clone()
                             .request(REQUEST_OPTIONS.clone(), testing::PREPARE.clone())
-                            .then(move |result| -> Result<(), ()> {
+                            .map(move |result| {
                                 assert_eq!(result.unwrap_err(), expect_reject);
-                                Ok(())
                             })
                     });
             }
@@ -419,9 +440,8 @@ mod tests {
             .run({
                 CLIENT.clone()
                     .request(REQUEST_OPTIONS.clone(), testing::PREPARE.clone())
-                    .then(move |result| -> Result<(), ()> {
+                    .map(move |result| {
                         assert_eq!(result.unwrap_err(), expect_reject);
-                        Ok(())
                     })
             });
     }

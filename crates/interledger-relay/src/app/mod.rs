@@ -39,13 +39,13 @@ pub type Connector =
     >>>;
 
 impl Config {
-    pub fn start(self) -> impl Future<Item = Connector, Error = SetupError> {
+    pub fn start(self) -> impl Future<Output = Result<Connector, SetupError>> {
         self.root.load_config().and_then(move |ildcp| {
-            self.start_with_ildcp(ildcp)
+            future::ready(self.start_with_ildcp(ildcp))
         })
     }
 
-    // Used for benchmarking.
+    // Used by benchmarks.
     #[doc(hidden)]
     pub fn start_with_ildcp(self, ildcp: ildcp::Response)
         -> Result<Connector, SetupError>
@@ -86,6 +86,7 @@ mod test_config {
     use lazy_static::lazy_static;
 
     use crate::AuthToken;
+    use crate::combinators;
     use crate::testing::{self, FULFILL, PREPARE};
     use super::*;
 
@@ -118,18 +119,16 @@ mod test_config {
 
         let future = connector
             .start()
-            .map_err(|err| panic!(err))
-            .and_then(|mut connector| {
-                connector.call({
+            .then(|connector_result| {
+                connector_result.unwrap().call({
                     hyper::Request::post("http://127.0.0.1:3002/ilp")
                         .header("Authorization", "secret_child")
                         .body(hyper::Body::from(PREPARE.as_ref()))
                         .unwrap()
                 })
             })
-            .map_err(|err| panic!(err))
             .map(|response| {
-                assert_eq!(response.status(), 200);
+                assert_eq!(response.unwrap().status(), 200);
             });
 
         testing::MockServer::new()
@@ -216,21 +215,24 @@ mod test_config {
                     .body(hyper::Body::from(PREPARE.as_ref()))
                     .unwrap()
             })
-            .and_then(|response| {
+            .then(|response_result| {
+                let response = response_result.unwrap();
                 assert_eq!(response.status(), 200);
-                response.into_body().concat2()
+                combinators::collect_http_response(response)
             })
-            .map(|body| {
+            .map(|body_result| {
+                let body = body_result.unwrap();
                 assert_eq!(body.as_ref(), FULFILL.as_ref());
             });
 
-        let start_server = start_connector.and_then(|connector| {
+        let start_server = start_connector.then(|connector_result| {
+            let connector = connector_result.unwrap();
             hyper::Server::bind(&CONNECTOR_ADDR.into())
-                .serve(move || -> Result<_, &'static str> {
-                    Ok(connector.clone())
-                })
+                .serve(hyper::service::make_service_fn(move |_socket| {
+                    future::ok::<_, std::convert::Infallible>(connector.clone())
+                }))
                 .with_graceful_shutdown(request)
-                .map_err(|err| panic!("unexpected error: {}", err))
+                .map(|result| { result.unwrap(); })
         });
 
         testing::MockServer::new()

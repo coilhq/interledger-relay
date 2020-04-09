@@ -1,7 +1,9 @@
 use std::error::Error;
 use std::fmt;
+use std::pin::Pin;
 
 use futures::prelude::*;
+use futures::task::{Context, Poll};
 
 /// A stream combinator which returns a maximum number of bytes before failing.
 #[derive(Debug)]
@@ -20,31 +22,41 @@ impl<S> LimitStream<S> {
     }
 }
 
-impl<S> Stream for LimitStream<S>
+impl<S: futures::stream::TryStream> Stream for LimitStream<S>
 where
-    S: Stream,
-    S::Item: AsRef<[u8]>,
+    // TODO why isn't this `futures::stream::TryStream`?
+    S: std::marker::Unpin + futures::stream::TryStream,
+    S::Ok: AsRef<[u8]>,
     S::Error: Error,
 {
-    type Item = S::Item;
-    type Error = LimitStreamError<S::Error>;
+    type Item = Result<S::Ok, LimitStreamError<S::Error>>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        let item = self.stream.poll()?;
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context)
+        -> Poll<Option<Self::Item>>
+    {
+        //let item = self.stream.try_poll_next(context)?;
+        // XXX what is going on here
+        let item = futures::stream::TryStream::try_poll_next(
+            Pin::new(&mut self.stream),
+            context,
+        );
 
-        if let Async::Ready(Some(chunk)) = &item {
+        if let Poll::Ready(Some(Ok(chunk))) = &item {
             let chunk_size = chunk.as_ref().len();
             match self.remaining.checked_sub(chunk_size) {
                 Some(remaining) => self.remaining = remaining,
                 None => {
                     self.remaining = 0;
-                    return Err(LimitStreamError::LimitExceeded);
+                    return Poll::Ready(Some(Err(LimitStreamError::LimitExceeded)));
                 },
             }
         }
 
-        Ok(item)
+        // XXX complicated, refactor
+        item.map(|item| item.map(|chunk_result| chunk_result.map_err(LimitStreamError::from)))
     }
+
+    // TODO implement size_hint
 }
 
 #[derive(Debug, PartialEq)]
@@ -81,7 +93,7 @@ impl<E: Error> fmt::Display for LimitStreamError<E> {
 
 #[cfg(test)]
 mod test_limit_stream {
-    use bytes::Bytes;
+    use bytes::{Bytes, BytesMut};
 
     use super::*;
 
@@ -111,11 +123,14 @@ mod test_limit_stream {
     fn collect_limited_stream(buffer: Bytes, limit: usize)
         -> Result<Bytes, LimitStreamError<hyper::Error>>
     {
-        let stream = hyper::Body::from(buffer);
-        LimitStream::new(limit, stream)
-            .concat2()
-            .wait()
-            .map(|chunk| Bytes::from(chunk))
+        use futures::executor::block_on;
+        let body = hyper::Body::from(buffer);
+        let mut stream = LimitStream::new(limit, body);
+        let mut output = BytesMut::new();
+        while let Some(chunk) = block_on(stream.try_next())? {
+            output.extend(chunk);
+        }
+        Ok(output.freeze())
     }
 
     impl<E: Error> LimitStreamError<E> {

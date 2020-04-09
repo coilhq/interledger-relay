@@ -1,11 +1,11 @@
 use std::fmt;
 use std::io::prelude::*;
-use std::io::Cursor;
 use std::str;
 use std::time::SystemTime;
 
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::{BufMut, BytesMut};
+use bytes::buf::ext::BufMutExt;
 use chrono::{DateTime, TimeZone, Utc};
 
 use super::oer::{self, BufOerExt, MutBufOerExt};
@@ -20,7 +20,7 @@ const ERROR_CODE_LEN: usize = 3;
 const MAX_MESSAGE_LEN: usize = 8191;
 const MAX_DATA_LEN: usize = 32767;
 
-static INTERLEDGER_TIMESTAMP_FORMAT: &'static str = "%Y%m%d%H%M%S%3f";
+static INTERLEDGER_TIMESTAMP_FORMAT: &str = "%Y%m%d%H%M%S%3f";
 
 // TODO TryFrom([u8])
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -156,8 +156,10 @@ impl Prepare {
     #[inline]
     pub fn set_amount(&mut self, amount: u64) {
         self.amount = amount;
-        let mut cursor = Cursor::new(&mut self.buffer);
-        cursor.set_position(self.content_offset as u64);
+        //let mut cursor = Cursor::new(&mut self.buffer);
+        //cursor.set_position(self.content_offset as u64);
+        //cursor.put_u64_be(amount);
+        let mut cursor = &mut self.buffer[self.content_offset..];
         cursor.put_u64_be(amount);
     }
 
@@ -563,10 +565,10 @@ impl MaxPacketAmountDetails {
     }
 
     pub fn to_bytes(&self) -> [u8; 16] {
+        use byteorder::ByteOrder;
         let mut bytes = [0x00_u8; 16];
-        let mut writer = Cursor::new(&mut bytes[..]);
-        writer.put_u64_be(self.amount_received);
-        writer.put_u64_be(self.max_amount);
+        BigEndian::write_u64(&mut bytes[0..8], self.amount_received);
+        BigEndian::write_u64(&mut bytes[8..16], self.max_amount);
         bytes
     }
 
@@ -616,9 +618,9 @@ mod test_packet {
         );
 
         // Empty buffer:
-        assert!(Packet::try_from(BytesMut::from(vec![])).is_err());
+        assert!(Packet::try_from(BytesMut::from(&[][..])).is_err());
         // Unknown packet type:
-        assert!(Packet::try_from(BytesMut::from(vec![0x99])).is_err());
+        assert!(Packet::try_from(BytesMut::from(&[0x99][..])).is_err());
     }
 
     #[test]
@@ -889,7 +891,7 @@ mod test_reject {
 mod test_max_packet_amount_details {
     use super::*;
 
-    static BYTES: &'static [u8] = b"\
+    static BYTES: &[u8] = b"\
         \x00\x00\x00\x00\x00\x03\x02\x01\
         \x00\x00\x00\x00\x00\x06\x05\x04\
     ";

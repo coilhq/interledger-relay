@@ -140,7 +140,7 @@ impl<'a> Addr<'a> {
     }
 
     pub fn to_address(&self) -> Address {
-        Address(Bytes::from(self.0))
+        Address(BytesMut::from(self.0).freeze())
     }
 
     #[inline]
@@ -164,7 +164,7 @@ impl<'a> Addr<'a> {
         let mut new_address = BytesMut::with_capacity(new_address_len);
 
         new_address.put_slice(self.0.as_ref());
-        new_address.put(b'.');
+        new_address.put_u8(b'.');
         new_address.put_slice(suffix);
 
         Address::try_from(new_address.freeze())
@@ -209,7 +209,7 @@ impl<'a> PartialEq<[u8]> for Addr<'a> {
     }
 }
 
-static SCHEMES: &'static [&'static [u8]] = &[
+static SCHEMES: &[&[u8]] = &[
     b"g", b"private", b"example", b"peer", b"self",
     b"test", b"test1", b"test2", b"test3", b"local",
 ];
@@ -249,7 +249,7 @@ mod serde_impls {
             D: Deserializer<'de>,
         {
             Addr::deserialize(deserializer)
-                .map(|addr| Address(Bytes::from(addr.as_ref())))
+                .map(|addr| addr.to_address())
         }
     }
 
