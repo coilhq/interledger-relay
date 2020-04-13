@@ -22,9 +22,7 @@ tokio = { version = "0.2.15", features = ["rt-threaded"] }
 [dependencies.ilp]
 package = "interledger-packet"
 features = ["serde"]
-git = "https://github.com/coilhq/interledger-rs"
-branch = "dj-connector-relay3"
-#path = "../../../ilp-rs/crates/interledger-packet"
+path = "../interledger-packet"
 
 [dev-dependencies]
 lazy_static = "1.4"
