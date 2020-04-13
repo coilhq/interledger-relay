@@ -19,7 +19,7 @@ const DEFAULT_MAX_TIMEOUT: time::Duration = time::Duration::from_secs(60);
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub root: ConnectorRoot,
-    pub peers: Vec<RelationConfig>,
+    pub relatives: Vec<RelationConfig>,
     pub routes: Vec<StaticRoute>,
     #[serde(default)]
     pub debug_service: DebugServiceOptions,
@@ -49,14 +49,14 @@ impl Config {
         -> Result<Connector, SetupError>
     {
         let address = ildcp.client_address().to_address();
-        let auth_tokens = self.peers
+        let auth_tokens = self.relatives
             .iter()
-            .flat_map(|peer| peer.auth_tokens().iter())
+            .flat_map(|relation| relation.auth_tokens().iter())
             .cloned();
-        let peers = self.peers
+        let peers = self.relatives
             .iter()
-            .map(|peer| {
-                peer.with_parent(&address)
+            .map(|relation| {
+                relation.with_parent(&address)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -111,7 +111,7 @@ mod test_config {
                 asset_scale: 9,
                 asset_code: "XRP".to_owned(),
             },
-            peers: PEERS.clone(),
+            relatives: PEERS.clone(),
             routes: testing::ROUTES.clone(),
             debug_service: DebugServiceOptions::default(),
         };
@@ -202,7 +202,7 @@ mod test_config {
                 asset_scale: 9,
                 asset_code: "XRP".to_owned(),
             },
-            peers: PEERS.clone(),
+            relatives: PEERS.clone(),
             routes: testing::ROUTES.clone(),
             debug_service: DebugServiceOptions::default(),
         }.start();

@@ -61,7 +61,7 @@ mod tests {
           , "asset_scale": 9
           , "asset_code": "XRP"
           }
-        , "peers":
+        , "relatives":
           [ { "type": "Child"
             , "auth": ["child_secret"]
             , "suffix": "child"
@@ -102,7 +102,7 @@ mod tests {
                     asset_scale: 9,
                     asset_code: "XRP".to_owned(),
                 },
-                peers: vec![
+                relatives: vec![
                     RelationConfig::Child {
                         auth: vec![AuthToken::new("child_secret")],
                         suffix: "child".to_owned(),
