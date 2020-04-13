@@ -16,4 +16,4 @@ steps:
   - '.'
 
 images: ['gcr.io/$PROJECT_ID/$REPO_NAME:$SHORT_SHA']
-timeout: 900s
+timeout: 1080s
