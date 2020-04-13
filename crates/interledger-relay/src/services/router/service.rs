@@ -110,7 +110,6 @@ impl RouterService {
                 auth,
                 peer_name: None,
             }, prepare)
-            //.then(move |result| {
             .inspect(move |result| {
                 if has_failover {
                     let is_success =
@@ -120,7 +119,6 @@ impl RouterService {
                         .unwrap()
                         .update(route_index, is_success)
                 }
-                //result
             });
 
         Either::Left(do_request)

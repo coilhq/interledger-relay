@@ -52,19 +52,15 @@ where
             return Either::Right(self.next.call(request));
         }
 
-        // TODO use matches!() macro
-        match request.from_relation() {
-            Relation::Child => {},
-            _ => {
-                warn!(
-                    "ildcp request from non-child peer: relation={:?} from_address={:?}",
-                    request.from_relation(), request.from_address(),
-                );
-                return Either::Left(err(self.make_reject(
-                    ilp::ErrorCode::F00_BAD_REQUEST,
-                    b"ILDCP request from non-child peer",
-                )))
-            },
+        if !matches!(request.from_relation(), Relation::Child) {
+            warn!(
+                "ildcp request from non-child peer: relation={:?} from_address={:?}",
+                request.from_relation(), request.from_address(),
+            );
+            return Either::Left(err(self.make_reject(
+                ilp::ErrorCode::F00_BAD_REQUEST,
+                b"ILDCP request from non-child peer",
+            )))
         }
 
         let peer_name = match request.peer_name() {

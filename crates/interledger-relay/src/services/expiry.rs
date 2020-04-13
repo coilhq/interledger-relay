@@ -39,7 +39,7 @@ impl<S> ExpiryService<S> {
 impl<S, Req> Service<Req> for ExpiryService<S>
 where
     S: Service<Req> + Send + 'static,
-    Req: Request,
+    Req: Request + Send + 'static,
 {
     type Future = Pin<Box<
         dyn Future<
@@ -61,25 +61,16 @@ where
         };
 
         let next = self.next.clone();
-        // TODO use .await to simplify this
-        Box::pin(
+        Box::pin(async move {
+            // TODO use Result::flatten once it stabilizes.
             tokio::time::timeout(
                 cmp::min(self.max_timeout, expires_in),
                 next.call(request),
-            )
-            .map_err(move |_error| self.make_reject(
+            ).await.map_err(move |_error| self.make_reject(
                 ilp::ErrorCode::R00_TRANSFER_TIMED_OUT,
                 b"request timed out",
-            ))
-            .map(|result| {
-                // TODO use Result::flatten once that stabilizes
-                match result {
-                    Ok(Ok(fulfill)) => Ok(fulfill),
-                    Ok(Err(reject)) => Err(reject),
-                    Err(reject) => Err(reject),
-                }
-            })
-        )
+            ))?
+        })
     }
 }
 

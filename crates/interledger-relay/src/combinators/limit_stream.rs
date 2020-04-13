@@ -24,7 +24,6 @@ impl<S> LimitStream<S> {
 
 impl<S: futures::stream::TryStream> Stream for LimitStream<S>
 where
-    // TODO why isn't this `futures::stream::TryStream`?
     S: std::marker::Unpin + futures::stream::TryStream,
     S::Ok: AsRef<[u8]>,
     S::Error: Error,
@@ -34,14 +33,8 @@ where
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context)
         -> Poll<Option<Self::Item>>
     {
-        //let item = self.stream.try_poll_next(context)?;
-        // XXX what is going on here
-        let item = futures::stream::TryStream::try_poll_next(
-            Pin::new(&mut self.stream),
-            context,
-        );
-
-        if let Poll::Ready(Some(Ok(chunk))) = &item {
+        let poll = Pin::new(&mut self.stream).try_poll_next(context);
+        if let Poll::Ready(Some(Ok(chunk))) = &poll {
             let chunk_size = chunk.as_ref().len();
             match self.remaining.checked_sub(chunk_size) {
                 Some(remaining) => self.remaining = remaining,
@@ -52,11 +45,14 @@ where
             }
         }
 
-        // XXX complicated, refactor
-        item.map(|item| item.map(|chunk_result| chunk_result.map_err(LimitStreamError::from)))
+        poll.map(|item| item.map(|chunk_result| {
+            chunk_result.map_err(LimitStreamError::from)
+        }))
     }
 
-    // TODO implement size_hint
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.remaining))
+    }
 }
 
 #[derive(Debug, PartialEq)]

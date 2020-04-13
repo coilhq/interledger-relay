@@ -251,7 +251,6 @@ impl MockServer {
             // to untangle the closure lifetimes.
             let mock = self.clone();
             future::ok::<_, std::convert::Infallible>({
-                // TODO async
                 hyper::service::service_fn(move |req| {
                     let mock = mock.clone();
                     (mock.test_request)(&req);

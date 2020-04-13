@@ -93,7 +93,6 @@ impl StaticRoute {
                 uri.put_slice(endpoint_prefix);
                 uri.put_slice(destination_segment);
                 uri.put_slice(endpoint_suffix);
-                //Ok(Uri::try_from(uri.freeze())?)
                 Ok(Uri::from_maybe_shared(uri.freeze())?)
             },
         }

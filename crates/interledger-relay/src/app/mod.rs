@@ -2,7 +2,6 @@ mod config;
 
 use std::time;
 
-use futures::prelude::*;
 use serde::Deserialize;
 
 pub use self::config::{ConnectorRoot, RelationConfig, SetupError};
@@ -39,10 +38,9 @@ pub type Connector =
     >>>;
 
 impl Config {
-    pub fn start(self) -> impl Future<Output = Result<Connector, SetupError>> {
-        self.root.load_config().and_then(move |ildcp| {
-            future::ready(self.start_with_ildcp(ildcp))
-        })
+    pub async fn start(self) -> Result<Connector, SetupError> {
+        let ildcp = self.root.load_config().await?;
+        self.start_with_ildcp(ildcp)
     }
 
     // Used by benchmarks.
@@ -82,6 +80,7 @@ impl Config {
 
 #[cfg(test)]
 mod test_config {
+    use futures::prelude::*;
     use hyper::service::Service;
     use lazy_static::lazy_static;
 

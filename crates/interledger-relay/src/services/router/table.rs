@@ -139,22 +139,29 @@ mod test_routing_table {
     fn test_resolve_unhealthy() {
         let mut table = RoutingTable::new(vec![
             StaticRoute::new(Bytes::from("test.one"), HOP_0.clone()),
-            StaticRoute::new(Bytes::from("test.one"), HOP_1.clone()),
+            // This route will be skipped because fallback the route's prefix
+            // must exactly match the first route's prefix.
+            StaticRoute::new(Bytes::from("test.one.abc"), HOP_1.clone()),
+            StaticRoute::new(Bytes::from("test.one"), HOP_2.clone()),
         ]);
+        assert_eq!(
+            table.resolve(ilp::Addr::new(b"test.one.a")),
+            Ok((0, &table.as_ref()[0])),
+        );
 
         *table.0[0].status.write().unwrap() = RouteStatus::Unhealthy {
             until: time::Instant::now() + time::Duration::from_secs(1),
         };
         assert_eq!(
-            table.resolve(ilp::Addr::new(b"test.one.alice")),
-            Ok((1, &table.as_ref()[1])),
+            table.resolve(ilp::Addr::new(b"test.one.a")),
+            Ok((2, &table.as_ref()[2])),
         );
 
-        *table.0[1].status.write().unwrap() = RouteStatus::Unhealthy {
+        *table.0[2].status.write().unwrap() = RouteStatus::Unhealthy {
             until: time::Instant::now() + time::Duration::from_secs(1),
         };
         assert_eq!(
-            table.resolve(ilp::Addr::new(b"test.one.alice")),
+            table.resolve(ilp::Addr::new(b"test.one.a")),
             Err(RoutingError::NoHeathyRoute),
         );
     }

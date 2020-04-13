@@ -216,6 +216,7 @@ mod test_dynamic_route {
                 },
                 after: RouteStatus::Unhealthy { until: now + 2 * SECOND },
             },
+
             // healthy → healthy (reset; window)
             Test {
                 success: false,
@@ -241,6 +242,35 @@ mod test_dynamic_route {
                 after: RouteStatus::Healthy {
                     remaining: 19,
                     failures: 1,
+                    updated_at: now,
+                },
+            },
+
+            // healthy → healthy (success)
+            Test {
+                success: true,
+                before: RouteStatus::Healthy {
+                    remaining: 15,
+                    failures: 1,
+                    updated_at: now - SECOND,
+                },
+                after: RouteStatus::Healthy {
+                    remaining: 14,
+                    failures: 1,
+                    updated_at: now,
+                },
+            },
+            // healthy → healthy (reset; success)
+            Test {
+                success: true,
+                before: RouteStatus::Healthy {
+                    remaining: 1,
+                    failures: 1,
+                    updated_at: now - SECOND,
+                },
+                after: RouteStatus::Healthy {
+                    remaining: 20,
+                    failures: 0,
                     updated_at: now,
                 },
             },

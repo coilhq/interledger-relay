@@ -43,7 +43,6 @@ where
     fn poll_ready(&mut self, _context: &mut Context<'_>)
         -> Poll<Result<(), Self::Error>>
     {
-       // XXX ???
        Poll::Ready(Ok(()))
     }
 
@@ -72,10 +71,7 @@ where
             &parts.headers,
             body,
             MAX_REQUEST_SIZE
-        )
-        .then(move |chunk_result| {
-            // TODO???
-            // The Result-in-a-Result is awkward, is there a better way?
+        ).then(move |chunk_result| {
             let prepare_result = chunk_result.map(ilp::Prepare::try_from);
             match prepare_result {
                 Ok(Ok(prepare)) => Either::Left({
@@ -86,9 +82,6 @@ where
                         })
                         .map(make_http_response)
                         .map(Result::Ok)
-                        //.then(|res_packet| {
-                        //    Ok(make_http_response(res_packet))
-                        //})
                 }),
                 Err(LimitStreamError::StreamError(error)) =>
                     Either::Right(err(error)),
@@ -112,18 +105,6 @@ where
         })
     }
 }
-
-/*XXX
-fn chunk_to_prepare(buffer: Bytes)
-    -> Result<ilp::Prepare, ilp::ParseError>
-{
-    // This used to not copy due to `BytesMut::try_mut`, which was removed in 0.5.
-    // See: <https://github.com/tokio-rs/bytes/issues/368>
-    // Now it copies, unfortunately.
-    let buffer = BytesMut::from(buffer.as_ref());
-    ilp::Prepare::try_from(buffer)
-}
-*/
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RequestWithHeaders {
@@ -163,7 +144,8 @@ impl Borrow<ilp::Prepare> for RequestWithHeaders {
 impl services::RequestWithPeerName for RequestWithHeaders {
     fn peer_name(&self) -> Option<&[u8]> {
         // TODO I think this copies the name into a HeaderName every call, which isn't ideal
-        self.headers.get(PEER_NAME)
+        self.headers
+            .get(PEER_NAME)
             .map(|header| header.as_ref())
     }
 }

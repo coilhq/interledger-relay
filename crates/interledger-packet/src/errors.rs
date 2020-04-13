@@ -36,7 +36,6 @@ quick_error! {
             display("AddressError {}", err)
             cause(err)
         }
-        // TODO &'static str instead of String?
         InvalidPacket(descr: String) {
             display("InvalidPacket {}", descr)
         }
