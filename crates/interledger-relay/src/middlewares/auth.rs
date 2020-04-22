@@ -60,9 +60,19 @@ where
     }
 
     fn call(&mut self, request: hyper::Request<hyper::Body>) -> Self::Future {
-        let auth = request.headers().get(hyper::header::AUTHORIZATION);
+        static BEARER_PREFIX: &[u8] = b"Bearer ";
+        let auth = request.headers()
+            .get(hyper::header::AUTHORIZATION)
+            .map(|token| {
+                let token = token.as_bytes();
+                if token.starts_with(BEARER_PREFIX) {
+                    &token[BEARER_PREFIX.len()..]
+                } else {
+                    token
+                }
+            });
         match auth {
-            Some(token) if self.tokens.contains(token.as_ref()) => {
+            Some(token) if self.tokens.contains(token) => {
                 Either::Left(self.next.call(request))
             },
             _ => Either::Right(ok({
@@ -152,6 +162,17 @@ mod test_auth_token_filter {
             block_on(service.call({
                 hyper::Request::post("/")
                     .header("Authorization", "token_1")
+                    .body(hyper::Body::empty())
+                    .unwrap()
+            })).unwrap().status(),
+            200,
+        );
+
+        // Correct token with "Bearer " prefix.
+        assert_eq!(
+            block_on(service.call({
+                hyper::Request::post("/")
+                    .header("Authorization", "Bearer token_1")
                     .body(hyper::Body::empty())
                     .unwrap()
             })).unwrap().status(),
