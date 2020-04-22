@@ -19,6 +19,7 @@ pub struct FromPeerService<S> {
 }
 
 pub trait RequestWithFrom: Request {
+    //fn from_account(&self) -> &Arc<String>;
     fn from_relation(&self) -> Relation;
     fn from_address(&self) -> ilp::Addr;
 }
@@ -50,9 +51,11 @@ where
         let auth = req.header(hyper::header::AUTHORIZATION);
         let peer = self.peers
             .iter()
-            .find(|peer| match auth {
-                Some(auth) => peer.is_authorized(auth),
-                None => false,
+            .find(|peer| {
+                match auth {
+                    Some(auth) => peer.is_authorized(auth),
+                    None => false,
+                }
             });
 
         // The auth middleware has already been run, so a peer should always be
@@ -106,6 +109,10 @@ impl RequestWithPeerName for RequestFromPeer {
 }
 
 impl RequestWithFrom for RequestFromPeer {
+    //fn from_account(&self) -> &std::rc::Rc<String> {
+    //    self.from_account
+    //}
+
     fn from_relation(&self) -> Relation {
         self.from_relation
     }
@@ -125,6 +132,12 @@ pub struct ConnectorPeer {
 
 impl ConnectorPeer {
     fn is_authorized(&self, token: &[u8]) -> bool {
+        static BEARER_PREFIX: &[u8] = b"Bearer ";
+        let token = if token.starts_with(BEARER_PREFIX) {
+            &token[BEARER_PREFIX.len()..]
+        } else {
+            token
+        };
         self.auth.contains(token)
     }
 }
@@ -227,5 +240,8 @@ mod test_connector_peer {
         assert_eq!(peer.is_authorized(b"token_1"), true);
         assert_eq!(peer.is_authorized(b"token_2"), true);
         assert_eq!(peer.is_authorized(b"token_3"), false);
+        assert_eq!(peer.is_authorized(b"Bearer token_1"), true);
+        assert_eq!(peer.is_authorized(b"Bearer token_2"), true);
+        assert_eq!(peer.is_authorized(b"Bearer token_3"), false);
     }
 }

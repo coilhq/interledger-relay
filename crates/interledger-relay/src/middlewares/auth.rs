@@ -60,10 +60,10 @@ where
     }
 
     fn call(&mut self, request: hyper::Request<hyper::Body>) -> Self::Future {
-        static BEARER_PREFIX: &[u8] = b"Bearer ";
         let auth = request.headers()
             .get(hyper::header::AUTHORIZATION)
             .map(|token| {
+                static BEARER_PREFIX: &[u8] = b"Bearer ";
                 let token = token.as_bytes();
                 if token.starts_with(BEARER_PREFIX) {
                     &token[BEARER_PREFIX.len()..]
