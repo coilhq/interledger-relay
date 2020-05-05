@@ -128,6 +128,7 @@ mod test_config_service {
         static ref REQUEST_PREPARE: TestRequest = TestRequest {
             prepare: PREPARE.clone(),
             peer_name: None,
+            from_account: Arc::new("account_1".to_owned()),
             from_relation: Relation::Child,
             from_address: ilp::Address::new(b"test.carl.child.123"),
         };
@@ -135,6 +136,7 @@ mod test_config_service {
         static ref REQUEST_ILDCP: TestRequest = TestRequest {
             prepare: ilp::Prepare::from(ildcp::Request::new()),
             peer_name: Some(b"bob"),
+            from_account: Arc::new("account_2".to_owned()),
             from_relation: Relation::Child,
             from_address:  ilp::Address::new(b"test.carl.child.123"),
         };
@@ -197,6 +199,7 @@ mod test_config_service {
     struct TestRequest {
         prepare: ilp::Prepare,
         peer_name: Option<&'static [u8]>,
+        from_account: Arc<String>,
         from_relation: Relation,
         from_address: ilp::Address,
     }
@@ -222,6 +225,10 @@ mod test_config_service {
     }
 
     impl RequestWithFrom for TestRequest {
+        fn from_account(&self) -> &Arc<String> {
+            &self.from_account
+        }
+
         fn from_relation(&self) -> Relation {
             self.from_relation
         }

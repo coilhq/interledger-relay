@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::error;
 use std::fmt;
+use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
 use futures::future::{Either, ok};
@@ -33,20 +34,25 @@ pub enum ConnectorRoot {
 }
 
 /// The `auth` token lists are valid incoming authentication tokens.
+/// `account` is an account's unique identifier. It is primarily used for
+/// logging in BigQuery.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(tag = "type")]
 pub enum RelationConfig {
     Child {
         auth: Vec<AuthToken>,
+        account: Arc<String>,
         /// The suffix must be an ILP address segment.
         suffix: String,
     },
     Peer {
         auth: Vec<AuthToken>,
+        account: Arc<String>,
     },
     Parent {
         auth: Vec<AuthToken>,
+        account: Arc<String>,
     },
 }
 
@@ -115,6 +121,15 @@ impl RelationConfig {
         }
     }
 
+    pub(crate) fn account(&self) -> Arc<String> {
+        match self {
+            RelationConfig::Child { account, .. }
+                | RelationConfig::Peer { account, .. }
+                | RelationConfig::Parent { account, .. }
+                => Arc::clone(account),
+        }
+    }
+
     pub(crate) fn with_parent(&self, parent_address: &ilp::Address)
         -> Result<ConnectorPeer, SetupError>
     {
@@ -130,6 +145,7 @@ impl RelationConfig {
 
         Ok(ConnectorPeer {
             relation: self.relation(),
+            account: self.account(),
             address,
             auth: self
                 .auth_tokens()

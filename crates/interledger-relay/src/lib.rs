@@ -13,15 +13,16 @@ use futures::prelude::*;
 
 pub use self::client::Client;
 pub use self::middlewares::AuthToken;
-pub use self::services::{DebugServiceOptions, NextHop, RouteFailover, RoutingTable, StaticRoute};
+pub use self::services::{BigQueryConfig, BigQueryServiceConfig, DebugServiceOptions};
+pub use self::services::{NextHop, RouteFailover, RoutingTable, StaticRoute};
 
 // TODO maybe support ping protocol
-// TODO support auth header "Bearer: " prefix
 
 pub trait Service<Req: Request>: Clone {
     type Future: 'static + Send
         + Future<Output = Result<ilp::Fulfill, ilp::Reject>>;
 
+    fn setup(&mut self) {}
     fn call(self, request: Req) -> Self::Future;
 }
 

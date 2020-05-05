@@ -27,9 +27,12 @@ impl<'de> Deserialize<'de> for RoutingTable {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time;
+
     use serde::Deserialize;
 
-    use crate::{AuthToken, DebugServiceOptions};
+    use crate::{AuthToken, BigQueryConfig, BigQueryServiceConfig, DebugServiceOptions};
     use crate::app::{Config, ConnectorRoot, RelationConfig};
     use crate::testing::ROUTES;
     use super::*;
@@ -63,10 +66,12 @@ mod tests {
           }
         , "relatives":
           [ { "type": "Child"
+            , "account": "child_account"
             , "auth": ["child_secret"]
             , "suffix": "child"
             }
           , { "type": "Parent"
+            , "account": "parent_account"
             , "auth": ["parent_secret"]
             }
           ]
@@ -92,6 +97,12 @@ mod tests {
             , "log_fulfill": false
             , "log_reject": true
             }
+        , "big_query_service":
+            { "api_key": "API_KEY"
+            , "project_id": "PROJECT_ID"
+            , "dataset_id": "DATASET_ID"
+            , "table_id": "TABLE_ID"
+            }
         }"#).expect("valid json");
 
         assert_eq!(
@@ -104,10 +115,12 @@ mod tests {
                 },
                 relatives: vec![
                     RelationConfig::Child {
+                        account: Arc::new("child_account".to_owned()),
                         auth: vec![AuthToken::new("child_secret")],
                         suffix: "child".to_owned(),
                     },
                     RelationConfig::Parent {
+                        account: Arc::new("parent_account".to_owned()),
                         auth: vec![AuthToken::new("parent_secret")],
                     },
                 ],
@@ -117,6 +130,17 @@ mod tests {
                     log_fulfill: false,
                     log_reject: true,
                 },
+                big_query_service: Some(BigQueryServiceConfig {
+                    batch_capacity: 500,
+                    flush_interval: time::Duration::from_secs(1),
+                    big_query: BigQueryConfig {
+                        origin: "https://bigquery.googleapis.com".to_owned(),
+                        api_key: "API_KEY".to_owned(),
+                        project_id: "PROJECT_ID".to_owned(),
+                        dataset_id: "DATASET_ID".to_owned(),
+                        table_id: "TABLE_ID".to_owned(),
+                    },
+                }),
             },
         );
     }

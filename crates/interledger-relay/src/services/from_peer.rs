@@ -19,7 +19,7 @@ pub struct FromPeerService<S> {
 }
 
 pub trait RequestWithFrom: Request {
-    //fn from_account(&self) -> &Arc<String>;
+    fn from_account(&self) -> &Arc<String>;
     fn from_relation(&self) -> Relation;
     fn from_address(&self) -> ilp::Addr;
 }
@@ -75,6 +75,7 @@ where
 
         Either::Left(self.next.call(RequestFromPeer {
             base: req,
+            from_account: Arc::clone(&peer.account),
             from_relation: peer.relation,
             from_address: peer.address.clone(),
         }))
@@ -84,6 +85,7 @@ where
 #[derive(Clone, Debug, PartialEq)]
 pub struct RequestFromPeer {
     base: RequestWithHeaders,
+    from_account: Arc<String>,
     from_relation: Relation,
     from_address: ilp::Address,
 }
@@ -109,9 +111,9 @@ impl RequestWithPeerName for RequestFromPeer {
 }
 
 impl RequestWithFrom for RequestFromPeer {
-    //fn from_account(&self) -> &std::rc::Rc<String> {
-    //    self.from_account
-    //}
+    fn from_account(&self) -> &Arc<String> {
+        &self.from_account
+    }
 
     fn from_relation(&self) -> Relation {
         self.from_relation
@@ -125,6 +127,7 @@ impl RequestWithFrom for RequestFromPeer {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConnectorPeer {
     pub relation: Relation,
+    pub account: Arc<String>,
     pub address: ilp::Address,
     /// The list of valid incoming authentication tokens.
     pub auth: HashSet<AuthToken>,
@@ -157,11 +160,13 @@ mod test_from_peer_service {
         static ref PEERS: Vec<ConnectorPeer> = vec![
             ConnectorPeer {
                 relation: Relation::Child,
+                account: Arc::new("child_account".to_owned()),
                 address: ilp::Address::new(b"test.relay.child"),
                 auth: HashSet::from_iter(vec![AuthToken::new("token_1")]),
             },
             ConnectorPeer {
                 relation: Relation::Parent,
+                account: Arc::new("parent_account".to_owned()),
                 address: ilp::Address::new(b"test.relay"),
                 auth: HashSet::from_iter(vec![AuthToken::new("token_2")]),
             },
@@ -213,6 +218,7 @@ mod test_from_peer_service {
             next.requests().collect::<Vec<_>>(),
             vec![RequestFromPeer {
                 base: RequestWithHeaders::new(PREPARE.clone(), headers),
+                from_account: Arc::new("child_account".to_owned()),
                 from_relation: Relation::Child,
                 from_address: ilp::Address::new(b"test.relay.child"),
             }],
@@ -230,6 +236,7 @@ mod test_connector_peer {
     fn test_is_authorized() {
         let peer = ConnectorPeer {
             relation: Relation::Child,
+            account: Arc::new("child_account".to_owned()),
             address: ilp::Address::new(b"test.relay"),
             auth: TOKENS
                 .iter()

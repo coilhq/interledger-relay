@@ -2,11 +2,10 @@ mod config;
 
 use std::time;
 
-use serde::Deserialize;
-
 pub use self::config::{ConnectorRoot, RelationConfig, SetupError};
 use crate::{Client, RoutingTable, StaticRoute};
 use crate::middlewares::{AuthTokenFilter, HealthCheckFilter, MethodFilter, Receiver};
+use crate::services::{BigQueryService, BigQueryServiceConfig};
 use crate::services::{ConfigService, DebugService, DebugServiceOptions, EchoService};
 use crate::services::{ExpiryService, FromPeerService, RouterService};
 use ilp::ildcp;
@@ -15,7 +14,7 @@ use ilp::ildcp;
 /// even if the Prepare's expiry is longer.
 const DEFAULT_MAX_TIMEOUT: time::Duration = time::Duration::from_secs(60);
 
-#[derive(Debug, PartialEq, Deserialize)]
+#[derive(Debug, PartialEq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub root: ConnectorRoot,
@@ -23,6 +22,8 @@ pub struct Config {
     pub routes: Vec<StaticRoute>,
     #[serde(default)]
     pub debug_service: DebugServiceOptions,
+    #[serde(default)]
+    pub big_query_service: Option<BigQueryServiceConfig>,
 }
 
 // TODO This should be an existential type once they are stable.
@@ -31,10 +32,13 @@ pub type Connector =
     HealthCheckFilter<MethodFilter<AuthTokenFilter<
         Receiver<
             // ILP Services:
-            DebugService<ExpiryService<FromPeerService<ConfigService<EchoService<
-                RouterService,
-            >>>>>,
-        >,
+            DebugService<ExpiryService<FromPeerService<
+                // RequestWithFrom:
+                ConfigService<BigQueryService<EchoService<
+                    RouterService
+                >>>
+            >>>
+        >
     >>>;
 
 impl Config {
@@ -61,9 +65,14 @@ impl Config {
             .collect::<Result<Vec<_>, _>>()?;
 
         let client = Client::new(address.clone());
+        // ILP packet services:
         let router_svc = RouterService::new(client, RoutingTable::new(self.routes));
         let echo_svc = EchoService::new(address.clone(), router_svc);
-        let ildcp_svc = ConfigService::new(ildcp, echo_svc);
+        let big_query_svc =
+            BigQueryService::new(address.clone(), self.big_query_service, echo_svc);
+        big_query_svc.setup();
+
+        let ildcp_svc = ConfigService::new(ildcp, big_query_svc);
         let from_peer_svc =
             FromPeerService::new(address.clone(), peers, ildcp_svc);
         let expiry_svc =
@@ -71,6 +80,7 @@ impl Config {
         let debug_svc =
             DebugService::new("packet", self.debug_service, expiry_svc);
 
+        // Middlewares:
         let receiver = Receiver::new(debug_svc);
         let auth_filter = AuthTokenFilter::new(auth_tokens, receiver);
         let method_filter = MethodFilter::new(hyper::Method::POST, auth_filter);
@@ -80,6 +90,8 @@ impl Config {
 
 #[cfg(test)]
 mod test_config {
+    use std::sync::Arc;
+
     use futures::prelude::*;
     use hyper::service::Service;
     use lazy_static::lazy_static;
@@ -94,10 +106,12 @@ mod test_config {
     lazy_static! {
         static ref PEERS: Vec<RelationConfig> = vec![
             RelationConfig::Child {
+                account: Arc::new("child_account".to_owned()),
                 auth: vec![AuthToken::new("secret_child")],
                 suffix: "child".to_owned(),
             },
             RelationConfig::Parent {
+                account: Arc::new("parent_account".to_owned()),
                 auth: vec![AuthToken::new("secret_parent")],
             },
         ];
@@ -114,6 +128,7 @@ mod test_config {
             relatives: PEERS.clone(),
             routes: testing::ROUTES.clone(),
             debug_service: DebugServiceOptions::default(),
+            big_query_service: None,
         };
 
         let future = connector
@@ -205,6 +220,7 @@ mod test_config {
             relatives: PEERS.clone(),
             routes: testing::ROUTES.clone(),
             debug_service: DebugServiceOptions::default(),
+            big_query_service: None,
         }.start();
 
         let request = hyper::Client::new()
