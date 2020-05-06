@@ -1,5 +1,6 @@
 mod client;
-mod logger2;
+mod logger;
+mod logger_queue;
 mod table;
 
 use std::pin::Pin;
@@ -13,12 +14,16 @@ pub use self::table::BigQueryConfig;
 use crate::Service;
 use crate::services::RequestWithFrom;
 use self::client::{BigQueryClient, BigQueryError};
-use self::logger2::{Logger, LoggerConfig};
+use self::logger::{Logger, LoggerConfig};
+use self::logger_queue::LoggerQueue;
 use self::table::BigQueryTable;
 
 pub type BigQueryServiceConfig = LoggerConfig;
 
 type Row = self::table::Row<RowData>;
+
+const OVERFLOW_INTERVAL: time::Duration = time::Duration::from_secs(4);
+const FLUSH_INTERVAL: time::Duration = time::Duration::from_secs(1);
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct RowData {
@@ -34,24 +39,46 @@ pub struct RowData {
 pub struct BigQueryService<S> {
     address: ilp::Address,
     next: S,
-    logger: Option<Logger<RowData>>,
+    logger: Arc<Logger<RowData>>,
 }
 
-impl<S> BigQueryService<S> {
+impl<S> BigQueryService<S>
+where
+    S: 'static + Clone + Send + Sync,
+{
     #[inline]
     pub fn new(address: ilp::Address, config: Option<LoggerConfig>, next: S) -> Self {
         BigQueryService {
             address,
             next,
-            logger: config.map(Logger::new),
+            logger: Arc::new(config.map(Logger::new).unwrap_or_default()),
         }
     }
 
     pub fn setup(&self) {
-        // TODO run table.exists()?
-        self.logger
-            .as_ref()
-            .map(Logger::start);
+        // TODO verify table.exists()?
+
+        let self_2 = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::delay_for(OVERFLOW_INTERVAL).await;
+                self_2.logger.clean();
+            }
+        });
+
+        let self_3 = self.clone();
+        tokio::spawn(async move {
+            // Stagger the logger flushes to avoid latency spikes.
+            let queue_count = self_3.logger.queues().len();
+            let flush_interval = FLUSH_INTERVAL / queue_count as u32;
+            let mut index = 0;
+            loop {
+                tokio::time::delay_for(flush_interval).await;
+                let logger = &self_3.logger.queues()[index];
+                logger.clone().flush_now();
+                index = (index + 1) % queue_count;
+            }
+        });
     }
 }
 
@@ -73,13 +100,11 @@ where
         let amount = prepare.amount();
 
         Box::pin(async move {
-            let logger = match self.logger {
-                Some(logger) => logger,
-                None => return self.next.call(request).await,
-            };
+            if self.logger.is_dummy() {
+                return self.next.clone().call(request).await;
+            }
 
-            let is_available = logger.is_available();
-            if !is_available {
+            if !self.logger.is_available() {
                 warn!(
                     "BigQuery unavailable, dropping packet: account={} destination={} amount={}",
                     account, destination, amount,
@@ -93,7 +118,7 @@ where
             }
 
             let fulfill = self.next.clone().call(request).await?;
-            logger.write(Row::new(RowData {
+            self.logger.write(Row::new(RowData {
                 account,
                 destination,
                 amount,

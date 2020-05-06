@@ -28,7 +28,6 @@ impl<'de> Deserialize<'de> for RoutingTable {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::time;
 
     use serde::Deserialize;
 
@@ -98,7 +97,8 @@ mod tests {
             , "log_reject": true
             }
         , "big_query_service":
-            { "api_key": "API_KEY"
+            { "queue_count": 5
+            , "api_key": "API_KEY"
             , "project_id": "PROJECT_ID"
             , "dataset_id": "DATASET_ID"
             , "table_id": "TABLE_ID"
@@ -131,8 +131,8 @@ mod tests {
                     log_reject: true,
                 },
                 big_query_service: Some(BigQueryServiceConfig {
+                    queue_count: 5,
                     batch_capacity: 500,
-                    flush_interval: time::Duration::from_secs(1),
                     big_query: BigQueryConfig {
                         origin: "https://bigquery.googleapis.com".to_owned(),
                         api_key: "API_KEY".to_owned(),
