@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 base64 = "0.12.0"
 bytes = { version = "0.5.4", features = ["serde"] }
+chrono = "0.4.11"
 env_logger = "0.7.1"
 futures = "0.3.4"
 http = "0.2.1"

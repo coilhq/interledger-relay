@@ -30,6 +30,7 @@ pub struct RowData {
     pub account: Arc<String>,
     pub destination: ilp::Address,
     pub amount: u64,
+    #[serde(serialize_with = "serialize_timestamp")]
     pub fulfill_time: time::SystemTime,
 }
 
@@ -126,5 +127,50 @@ where
             }));
             Ok(fulfill)
         })
+    }
+}
+
+/// Serialize a `SystemTime` to a BigQuery `TIMESTAMP`.
+///
+/// <https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#timestamp_type>
+fn serialize_timestamp<S>(time: &time::SystemTime, serializer: S)
+    -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let datetime = chrono::DateTime::<chrono::Utc>::from(*time);
+
+    serializer.collect_str({
+        &datetime.format("%Y-%m-%dT%H:%M:%S.%6fZ")
+    })
+}
+
+#[cfg(test)]
+mod test_big_query_service {
+    use chrono::TimeZone;
+
+    use crate::testing;
+    use super::*;
+
+    #[test]
+    fn test_serialize_row_data() {
+        const EXPECT: &str = r#"{
+  "account": "ACCOUNT",
+  "destination": "test.relay",
+  "amount": 123,
+  "fulfill_time": "2020-05-06T07:08:09.000000Z"
+}"#;
+        let fulfill_time = time::SystemTime::from({
+            chrono::Utc.ymd(2020, 05, 06).and_hms(07, 08, 09)
+        });
+        assert_eq!(
+            serde_json::to_string_pretty(&RowData {
+                account: Arc::new("ACCOUNT".to_owned()),
+                destination: testing::ADDRESS.to_address(),
+                amount:  123,
+                fulfill_time,
+            }).unwrap(),
+            EXPECT,
+        );
     }
 }
