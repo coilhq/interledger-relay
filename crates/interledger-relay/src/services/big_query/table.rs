@@ -83,6 +83,7 @@ pub struct Row<D> {
 #[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct InsertAllResponse {
+    #[serde(default)]
     pub insert_errors: Vec<InsertError>,
 }
 
