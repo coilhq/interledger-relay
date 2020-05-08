@@ -1,5 +1,5 @@
-use futures::future::Either;
 use futures::prelude::*;
+use log::debug;
 use yup_oauth2 as oauth2;
 
 use crate::combinators::{self, LimitStreamError};
@@ -61,33 +61,32 @@ impl BigQueryClient {
         })
     }
 
-    pub fn request<Resp>(&self, request: hyper::Request<hyper::Body>)
-        -> impl Future<Output = Result<Resp, BigQueryError>>
-            + Send + 'static
+    pub async fn request<Resp>(&self, request: hyper::Request<hyper::Body>)
+        -> Result<Resp, BigQueryError>
     where
         Resp: for<'q> serde::Deserialize<'q> + Send + 'static,
     {
-        self.hyper
+        let response = self.hyper
             .request(request)
             .map_err(BigQueryError::Hyper)
-            .and_then(|response| {
-                if response.status() != hyper::StatusCode::OK {
-                    return Either::Right(future::err({
-                        BigQueryError::StatusCode(response.status())
-                    }));
-                }
+            .await?;
+        let (parts, body) = response.into_parts();
+        let body = combinators::collect_http_body(
+            &parts.headers,
+            body,
+            std::usize::MAX,
+        ).map_err(limit_to_big_query_error).await?;
 
-                let (parts, body) = response.into_parts();
-                Either::Left(combinators::collect_http_body(
-                    &parts.headers,
-                    body,
-                    std::usize::MAX,
-                ).map_err(limit_to_big_query_error))
-            })
-            .and_then(|body| future::ready({
-                serde_json::from_slice::<Resp>(&body)
-                    .map_err(BigQueryError::Serde)
-            }))
+        if parts.status != hyper::StatusCode::OK {
+            debug!(
+                "response error: status={} body='{:?}'",
+                parts.status, body,
+            );
+            return Err(BigQueryError::StatusCode(parts.status));
+        }
+
+        serde_json::from_slice::<Resp>(&body)
+            .map_err(BigQueryError::Serde)
     }
 }
 
