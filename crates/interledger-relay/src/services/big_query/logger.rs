@@ -22,8 +22,6 @@ pub struct LoggerConfig {
     /// <https://cloud.google.com/bigquery/quotas#streaming_inserts>.
     #[serde(default = "default_batch_capacity")]
     pub batch_capacity: usize,
-    //#[serde(default = "default_flush_interval")]
-    //pub flush_interval: time::Duration,
     #[serde(flatten)]
     pub big_query: BigQueryConfig,
 }
