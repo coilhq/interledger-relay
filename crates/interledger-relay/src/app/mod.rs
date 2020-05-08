@@ -44,12 +44,12 @@ pub type Connector =
 impl Config {
     pub async fn start(self) -> Result<Connector, SetupError> {
         let ildcp = self.root.load_config().await?;
-        self.start_with_ildcp(ildcp)
+        self.start_with_ildcp(ildcp).await
     }
 
     // Used by benchmarks.
     #[doc(hidden)]
-    pub fn start_with_ildcp(self, ildcp: ildcp::Response)
+    pub async fn start_with_ildcp(self, ildcp: ildcp::Response)
         -> Result<Connector, SetupError>
     {
         let address = ildcp.client_address().to_address();
@@ -68,9 +68,11 @@ impl Config {
         // ILP packet services:
         let router_svc = RouterService::new(client, RoutingTable::new(self.routes));
         let echo_svc = EchoService::new(address.clone(), router_svc);
-        let big_query_svc =
-            BigQueryService::new(address.clone(), self.big_query_service, echo_svc);
-        big_query_svc.setup();
+        let big_query_svc = BigQueryService::new(
+            address.clone(),
+            self.big_query_service,
+            echo_svc,
+        ).await?;
 
         let ildcp_svc = ConfigService::new(ildcp, big_query_svc);
         let from_peer_svc =

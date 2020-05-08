@@ -98,7 +98,6 @@ mod tests {
             }
         , "big_query_service":
             { "queue_count": 5
-            , "api_key": "API_KEY"
             , "project_id": "PROJECT_ID"
             , "dataset_id": "DATASET_ID"
             , "table_id": "TABLE_ID"
@@ -135,10 +134,10 @@ mod tests {
                     batch_capacity: 500,
                     big_query: BigQueryConfig {
                         origin: "https://bigquery.googleapis.com".to_owned(),
-                        api_key: "API_KEY".to_owned(),
                         project_id: "PROJECT_ID".to_owned(),
                         dataset_id: "DATASET_ID".to_owned(),
                         table_id: "TABLE_ID".to_owned(),
+                        service_account_key_file: None,
                     },
                 }),
             },

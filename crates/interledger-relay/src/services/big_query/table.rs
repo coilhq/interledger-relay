@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use std::time;
 
-use futures::future::Either;
-use futures::prelude::*;
 use log::{trace, warn};
 
 use super::{BigQueryClient, BigQueryError};
@@ -11,7 +9,6 @@ use super::{BigQueryClient, BigQueryError};
 #[derive(Clone, Debug)]
 pub struct BigQueryTable {
     client: Arc<BigQueryClient>,
-    api_key: Arc<String>,
     //get_table_uri: hyper::Uri,
     insert_all_uri: hyper::Uri,
 }
@@ -21,20 +18,23 @@ pub struct BigQueryTable {
 pub struct BigQueryConfig {
     #[serde(default = "default_origin")]
     pub origin: String,
-    pub api_key: String,
     pub project_id: String,
     pub dataset_id: String,
     pub table_id: String,
+    /// <https://docs.rs/yup-oauth2/4.1.2/yup_oauth2/struct.ServiceAccountKey.html>
+    pub service_account_key_file: Option<std::path::PathBuf>,
     //pub queue_capacity: usize,
 }
 
 fn default_origin() -> String { "https://bigquery.googleapis.com".to_owned() }
 
 impl BigQueryTable {
-    pub fn new(config: &BigQueryConfig) -> Self {
+    pub fn new(
+        config: &BigQueryConfig,
+        client: Arc<BigQueryClient>,
+    ) -> Self {
         BigQueryTable {
-            client: Arc::new(BigQueryClient::new()),
-            api_key: Arc::new(config.api_key.clone()),
+            client,
             //get_table_uri: config.get_table_uri().unwrap(),
             // XXX unwrap
             insert_all_uri: config.insert_all_uri().unwrap(),
@@ -111,9 +111,9 @@ macro_rules! try_insert_all {
     ($rows:expr, $future:expr) => {
         match $future {
             Ok(ok) => ok,
-            Err(error) => return Either::Right(future::err({
+            Err(error) => return Err({
                 InsertAllError::new($rows, error)
-            })),
+            }),
         }
     };
 }
@@ -124,9 +124,8 @@ impl BigQueryTable {
     ///   * <https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/insertAll>
     ///   * <https://github.com/googleapis/nodejs-bigquery/blob/ea3d7afe18f8f22c6541043c92c26625ae9e0e85/src/table.ts#L1905>
     ///
-    pub fn insert_all<D>(self, rows: Vec<Row<D>>)
-        -> impl Future<Output = Result<(), InsertAllError<D>>>
-            + Send + 'static
+    pub async fn insert_all<D>(self, rows: Vec<Row<D>>)
+        -> Result<(), InsertAllError<D>>
     where
         D: serde::Serialize + Clone + Send + Sync + 'static,
     {
@@ -134,51 +133,64 @@ impl BigQueryTable {
         let json = try_insert_all!(rows,
             serde_json::to_string(&InsertAllRequest { rows: &rows })
                 .map_err(BigQueryError::Serde));
-        let request = try_insert_all!(rows, hyper::Request::builder()
+        let token = try_insert_all!(rows,
+            self.client.token()
+                .await
+                .map_err(BigQueryError::OAuth));
+        let request = hyper::Request::builder()
             .method(hyper::Method::POST)
             .uri(&self.insert_all_uri)
             .header(hyper::header::ACCEPT, "application/json")
             .header(hyper::header::CONTENT_LENGTH, json.len())
-            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .header(hyper::header::CONTENT_TYPE, "application/json");
+        let request = match token {
+            Some(token) => request.header(
+                hyper::header::AUTHORIZATION,
+                format!("Bearer {}", token.as_str()),
+            ),
+            None => request,
+        };
+        let request = try_insert_all!(rows, request
             .body(hyper::Body::from(json))
             .map_err(BigQueryError::HTTP));
         let start = time::Instant::now();
-        Either::Left(self.client
-            .request::<InsertAllResponse>(request)
-            .then(move |response_result| {
-                let elapsed = time::Instant::now() - start;
-                let response = match response_result {
-                    Ok(response) => response,
-                    Err(error) => {
-                        warn!(
-                            "insert_all error: elapsed={:?} error={:?} rows={}",
-                            elapsed, error, rows.len(),
-                        );
-                        return future::err(InsertAllError::new(rows, error));
-                    },
-                };
-                if response.insert_errors.is_empty() {
-                    trace!(
-                        "insert_all success: elapsed={:?} rows={:?}",
-                        elapsed, rows.len(),
-                    );
-                    return future::ok(());
-                }
 
+        let response_result = self.client
+            .request::<InsertAllResponse>(request)
+            .await;
+
+        let elapsed = time::Instant::now() - start;
+        let response = match response_result {
+            Ok(response) => response,
+            Err(error) => {
                 warn!(
-                    "insert_all partial error: elapsed={:?} errors={} errors[0]={:?}",
-                    elapsed,
-                    response.insert_errors.len(),
-                    &response.insert_errors[0],
+                    "insert_all error: elapsed={:?} error={:?} rows={}",
+                    elapsed, error, rows.len(),
                 );
-                let mut retries = Vec::with_capacity(response.insert_errors.len());
-                retries.extend({
-                    response.insert_errors
-                        .iter()
-                        .map(|error| rows[error.index as usize].clone())
-                });
-                future::err(InsertAllError::new(retries, BigQueryError::PartialError))
-            }))
+                return Err(InsertAllError::new(rows, error));
+            },
+        };
+        if response.insert_errors.is_empty() {
+            trace!(
+                "insert_all success: elapsed={:?} rows={:?}",
+                elapsed, rows.len(),
+            );
+            return Ok(());
+        }
+
+        warn!(
+            "insert_all partial error: elapsed={:?} errors={} errors[0]={:?}",
+            elapsed,
+            response.insert_errors.len(),
+            &response.insert_errors[0],
+        );
+        let mut retries = Vec::with_capacity(response.insert_errors.len());
+        retries.extend({
+            response.insert_errors
+                .iter()
+                .map(|error| rows[error.index as usize].clone())
+        });
+        Err(InsertAllError::new(retries, BigQueryError::PartialError))
     }
 }
 
@@ -203,12 +215,11 @@ impl BigQueryConfig {
         use percent_encoding::{NON_ALPHANUMERIC, percent_encode};
         const CHARS: &percent_encoding::AsciiSet = &NON_ALPHANUMERIC.remove(b'_');
         format!(
-            "{}/bigquery/v2/projects/{}/datasets/{}/tables/{}/insertAll?key={}",
+            "{}/bigquery/v2/projects/{}/datasets/{}/tables/{}/insertAll",
             self.origin,
             percent_encode(self.project_id.as_bytes(), CHARS),
             percent_encode(self.dataset_id.as_bytes(), CHARS),
             percent_encode(self.table_id.as_bytes(), CHARS),
-            percent_encode(self.api_key.as_bytes(), CHARS),
         ).parse()
     }
 }
@@ -227,6 +238,7 @@ impl<D> Row<D> {
 
 #[cfg(test)]
 mod test_big_query_table {
+    use futures::prelude::*;
     use lazy_static::lazy_static;
 
     use crate::testing;
@@ -235,10 +247,10 @@ mod test_big_query_table {
     lazy_static! {
         static ref CONFIG: BigQueryConfig = BigQueryConfig {
             origin: testing::RECEIVER_ORIGIN.to_owned(),
-            api_key: "API_KEY".to_owned(),
             project_id: "PROJECT_ID".to_owned(),
             dataset_id: "DATASET_ID".to_owned(),
             table_id: "TABLE_ID".to_owned(),
+            service_account_key_file: None,
             //batch_capacity: 3,
             //queue_capacity: 6,
         };
@@ -249,7 +261,8 @@ mod test_big_query_table {
 
     #[test]
     fn test_insert_all_ok() {
-        let table = BigQueryTable::new(&CONFIG);
+        let client = Arc::new(BigQueryClient::new(None));
+        let table = BigQueryTable::new(&CONFIG, client);
         testing::MockServer::new()
             .test_request(|request| {
                 assert_eq!(request.method(), hyper::Method::POST);
@@ -257,7 +270,6 @@ mod test_big_query_table {
                     request.uri().path(),
                     "/bigquery/v2/projects/PROJECT_ID/datasets/DATASET_ID/tables/TABLE_ID/insertAll",
                 );
-                assert_eq!(request.uri().query(), Some("key=API_KEY"));
             })
             .test_body(|body| {
                 assert_eq!(
@@ -286,7 +298,8 @@ mod test_big_query_table {
 
     #[test]
     fn test_insert_all_partial_error() {
-        let table = BigQueryTable::new(&CONFIG);
+        let client = Arc::new(BigQueryClient::new(None));
+        let table = BigQueryTable::new(&CONFIG, client);
         testing::MockServer::new()
             .with_response(|| {
                 hyper::Response::builder()
@@ -314,7 +327,8 @@ mod test_big_query_table {
 
     #[test]
     fn test_insert_all_total_error() {
-        let table = BigQueryTable::new(&CONFIG);
+        let client = Arc::new(BigQueryClient::new(None));
+        let table = BigQueryTable::new(&CONFIG, client);
         testing::MockServer::new()
             .with_response(|| {
                 hyper::Response::builder()

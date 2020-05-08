@@ -1,8 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use log::info;
+use yup_oauth2 as oauth2;
 
-use super::{BigQueryConfig, BigQueryTable, LoggerQueue};
+use super::{BigQueryClient, BigQueryConfig, BigQueryTable, LoggerQueue};
 use super::table::Row;
 
 #[derive(Debug)]
@@ -35,17 +36,31 @@ impl<D> Logger<D>
 where
     D: 'static + Clone + Send + Sync + serde::Serialize,
 {
-    pub fn new(config: LoggerConfig) -> Self {
+    pub async fn new(config: LoggerConfig) -> Result<Self, oauth2::Error> {
         debug_assert_ne!(config.queue_count, 0);
-        let table = BigQueryTable::new(&config.big_query);
+
+        let authenticator = match &config.big_query.service_account_key_file {
+            Some(sa_key_file) => Some({
+                let sa_key =
+                    oauth2::read_service_account_key(sa_key_file).await?;
+                oauth2::ServiceAccountAuthenticator::builder(sa_key)
+                    .build()
+                    .await?
+            }),
+            None => None,
+        };
+        let client = BigQueryClient::new(authenticator);
+        let client = Arc::new(client);
+
+        let table = BigQueryTable::new(&config.big_query, client);
         let config = Arc::new(config);
         let queues = (0..config.queue_count)
             .map(|_i| LoggerQueue::new(config.clone(), table.clone()))
             .collect::<Vec<_>>();
-        Logger {
+        Ok(Logger {
             queues,
             overflow: Mutex::new(Vec::new()),
-        }
+        })
     }
 
     pub fn queues(&self) -> &[LoggerQueue<D>] {
@@ -111,6 +126,7 @@ impl<D> Default for Logger<D> {
 
 #[cfg(test)]
 mod test_logger {
+    use futures::executor::block_on;
     use lazy_static::lazy_static;
 
     use crate::testing;
@@ -122,10 +138,10 @@ mod test_logger {
             batch_capacity: 3,
             big_query: BigQueryConfig {
                 origin: testing::RECEIVER_ORIGIN.to_owned(),
-                api_key: "API_KEY".to_owned(),
                 project_id: "PROJECT_ID".to_owned(),
                 dataset_id: "DATASET_ID".to_owned(),
                 table_id: "TABLE_ID".to_owned(),
+                service_account_key_file: None,
             },
         };
 
@@ -146,7 +162,7 @@ mod test_logger {
 
     #[test]
     fn test_new() {
-        let logger = Logger::new(CONFIG.clone());
+        let logger = block_on(Logger::new(CONFIG.clone())).unwrap();
         assert!(!logger.is_dummy());
         assert!(logger.is_available());
         assert_eq!(logger.queues.len(), CONFIG.queue_count);
@@ -157,7 +173,7 @@ mod test_logger {
 
     #[test]
     fn test_write() {
-        let logger = Logger::new(CONFIG.clone());
+        let logger = block_on(Logger::new(CONFIG.clone())).unwrap();
         logger.write(ROWS[0].clone());
         logger.write(ROWS[1].clone());
         assert_eq!(logger.queues[0].len(), 2);
@@ -166,7 +182,7 @@ mod test_logger {
 
     #[test]
     fn test_clean() {
-        let logger = Logger::new(CONFIG.clone());
+        let logger = block_on(Logger::new(CONFIG.clone())).unwrap();
         logger.overflow
             .lock()
             .unwrap()

@@ -9,6 +9,7 @@ use std::time;
 
 use futures::prelude::*;
 use log::warn;
+use yup_oauth2 as oauth2;
 
 pub use self::table::BigQueryConfig;
 use crate::Service;
@@ -25,6 +26,7 @@ type Row = self::table::Row<RowData>;
 const OVERFLOW_INTERVAL: time::Duration = time::Duration::from_secs(4);
 const FLUSH_INTERVAL: time::Duration = time::Duration::from_secs(1);
 
+// TODO move to Logger?
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct RowData {
     pub account: Arc<String>,
@@ -48,15 +50,23 @@ where
     S: 'static + Clone + Send + Sync,
 {
     #[inline]
-    pub fn new(address: ilp::Address, config: Option<LoggerConfig>, next: S) -> Self {
-        BigQueryService {
+    pub async fn new(
+        address: ilp::Address,
+        config: Option<LoggerConfig>,
+        next: S,
+    ) -> Result<Self, oauth2::Error> {
+        let logger = match config {
+            Some(config) => Logger::new(config).await?,
+            None => Logger::default(),
+        };
+        Ok(BigQueryService {
             address,
             next,
-            logger: Arc::new(config.map(Logger::new).unwrap_or_default()),
-        }
+            logger: Arc::new(logger),
+        })
     }
 
-    pub fn setup(&self) {
+    pub async fn setup(&mut self) {
         // TODO verify table.exists()?
 
         let self_2 = self.clone();

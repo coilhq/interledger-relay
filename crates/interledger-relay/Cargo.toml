@@ -1,6 +1,6 @@
 [package]
 name = "interledger-relay"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["dj <dj@coil.com>"]
 description = "Interledger connector relay"
 edition = "2018"
@@ -21,6 +21,7 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 tokio = { version = "0.2.15", features = ["rt-threaded"] }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
+yup-oauth2 = "4.1.2"
 
 [dependencies.ilp]
 package = "interledger-packet"

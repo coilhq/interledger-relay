@@ -163,6 +163,7 @@ pub struct SetupError(ErrorKind);
 enum ErrorKind {
     ParseError(ilp::ParseError),
     Reject(ilp::Reject),
+    OAuth(yup_oauth2::Error),
 }
 
 impl error::Error for SetupError {
@@ -170,6 +171,7 @@ impl error::Error for SetupError {
         match &self.0 {
             ErrorKind::ParseError(inner) => Some(inner),
             ErrorKind::Reject(_) => None,
+            ErrorKind::OAuth(inner) => Some(inner),
         }
     }
 }
@@ -179,6 +181,7 @@ impl fmt::Display for SetupError {
         match &self.0 {
             ErrorKind::ParseError(inner) => write!(f, "SetupError({})", inner),
             ErrorKind::Reject(reject) => write!(f, "SetupError({:?})", reject),
+            ErrorKind::OAuth(inner) => write!(f, "SetupError({:?})", inner),
         }
     }
 }
@@ -198,6 +201,12 @@ impl From<ilp::AddressError> for SetupError {
 impl From<ilp::Reject> for SetupError {
     fn from(reject: ilp::Reject) -> Self {
         SetupError(ErrorKind::Reject(reject))
+    }
+}
+
+impl From<yup_oauth2::Error> for SetupError {
+    fn from(inner: yup_oauth2::Error) -> Self {
+        SetupError(ErrorKind::OAuth(inner))
     }
 }
 

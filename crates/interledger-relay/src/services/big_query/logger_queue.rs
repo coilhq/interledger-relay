@@ -122,7 +122,8 @@ mod test_logger_queue {
 
     use crate::testing;
     use super::*;
-    use super::super::table::{BigQueryConfig, InsertAllRequest, InsertAllResponse, InsertError};
+    use super::super::{BigQueryClient, BigQueryConfig};
+    use super::super::table::{InsertAllRequest, InsertAllResponse, InsertError};
 
     lazy_static! {
         static ref CONFIG: Arc<LoggerConfig> = Arc::new(LoggerConfig {
@@ -130,14 +131,17 @@ mod test_logger_queue {
             batch_capacity: 3,
             big_query: BigQueryConfig {
                 origin: testing::RECEIVER_ORIGIN.to_owned(),
-                api_key: "API_KEY".to_owned(),
                 project_id: "PROJECT_ID".to_owned(),
                 dataset_id: "DATASET_ID".to_owned(),
                 table_id: "TABLE_ID".to_owned(),
+                service_account_key_file: None,
             },
         });
 
-        static ref TABLE: BigQueryTable = BigQueryTable::new(&CONFIG.big_query);
+        static ref TABLE: BigQueryTable = BigQueryTable::new(
+            &CONFIG.big_query,
+            Arc::new(BigQueryClient::new(None)),
+        );
 
         static ref ROWS: Vec<Row<i32>> = (0..7)
             .map(|i| Row::new(i))
