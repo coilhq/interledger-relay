@@ -55,18 +55,23 @@ where
         config: Option<LoggerConfig>,
         next: S,
     ) -> Result<Self, oauth2::Error> {
+        let has_config = config.is_some();
         let logger = match config {
             Some(config) => Logger::new(config).await?,
             None => Logger::default(),
         };
-        Ok(BigQueryService {
+        let mut service = BigQueryService {
             address,
             next,
             logger: Arc::new(logger),
-        })
+        };
+        if has_config {
+            service.setup().await;
+        }
+        Ok(service)
     }
 
-    pub async fn setup(&mut self) {
+    async fn setup(&mut self) {
         // TODO verify table.exists()?
 
         let self_2 = self.clone();
@@ -80,14 +85,14 @@ where
         let self_3 = self.clone();
         tokio::spawn(async move {
             // Stagger the logger flushes to avoid latency spikes.
-            let queue_count = self_3.logger.queues().len();
-            let flush_interval = FLUSH_INTERVAL / queue_count as u32;
+            let queues = self_3.logger.queues();
+            let flush_interval = FLUSH_INTERVAL / queues.len() as u32;
             let mut index = 0;
             loop {
                 tokio::time::delay_for(flush_interval).await;
-                let logger = &self_3.logger.queues()[index];
+                let logger = &queues[index];
                 logger.clone().flush_now();
-                index = (index + 1) % queue_count;
+                index = (index + 1) % queues.len();
             }
         });
     }
