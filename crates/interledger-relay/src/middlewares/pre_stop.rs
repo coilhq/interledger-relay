@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
+use std::time;
 
 use futures::prelude::*;
 use futures::task::{Context, Poll};
@@ -101,10 +102,11 @@ where
                 *stopping = true;
             }
             info!("relay stopping");
+            let start = time::Instant::now();
             let data = Arc::clone(&self.data);
             return Box::pin({
-                (data.stop)().map(|_| {
-                    info!("relay stopped");
+                (data.stop)().map(move |_| {
+                    info!("relay stopped: duration={:?}", time::Instant::now() - start);
                     Ok(hyper::Response::builder()
                         .status(hyper::StatusCode::OK)
                         .body(hyper::Body::empty())
