@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time;
 
 use futures::prelude::*;
-use log::warn;
+use log::{debug, warn};
 use yup_oauth2 as oauth2;
 
 pub use self::table::BigQueryConfig;
@@ -22,9 +22,6 @@ use self::table::BigQueryTable;
 pub type BigQueryServiceConfig = LoggerConfig;
 
 type Row = self::table::Row<RowData>;
-
-const OVERFLOW_INTERVAL: time::Duration = time::Duration::from_secs(4);
-const FLUSH_INTERVAL: time::Duration = time::Duration::from_secs(1);
 
 // TODO move to Logger?
 #[derive(Clone, Debug, serde::Serialize)]
@@ -42,6 +39,7 @@ pub struct RowData {
 pub struct BigQueryService<S> {
     address: ilp::Address,
     next: S,
+    flush_interval: time::Duration,
     logger: Arc<Logger<RowData>>,
 }
 
@@ -56,6 +54,10 @@ where
         next: S,
     ) -> Result<Self, oauth2::Error> {
         let has_config = config.is_some();
+        let flush_interval = config
+            .as_ref()
+            .map(|config| config.flush_interval)
+            .unwrap_or_default();
         let logger = match config {
             Some(config) => Logger::new(config).await?,
             None => Logger::default(),
@@ -63,32 +65,50 @@ where
         let mut service = BigQueryService {
             address,
             next,
+            flush_interval,
             logger: Arc::new(logger),
         };
         if has_config {
-            service.setup().await;
+            service.setup();
         }
         Ok(service)
     }
 
-    async fn setup(&mut self) {
+    pub async fn stop(self) {
+        debug!("stopping logger");
+        self.logger.clean();
+        for queue in self.logger.queues() {
+            queue.clone().flush_now();
+        }
+
+        const ATTEMPTS: usize = 100;
+        for _i in 0..ATTEMPTS {
+            let is_stopped = self.logger
+                .queues()
+                .iter()
+                .all(LoggerQueue::is_idle);
+            if is_stopped {
+                debug!("stopped with no unlogged rows");
+                return;
+            }
+            tokio::time::delay_for(time::Duration::from_millis(250)).await;
+        }
+        warn!("stopped logger with unlogged rows");
+    }
+
+    fn setup(&mut self) {
         // TODO verify table.exists()?
 
         let self_2 = self.clone();
         tokio::spawn(async move {
-            loop {
-                tokio::time::delay_for(OVERFLOW_INTERVAL).await;
-                self_2.logger.clean();
-            }
-        });
-
-        let self_3 = self.clone();
-        tokio::spawn(async move {
             // Stagger the logger flushes to avoid latency spikes.
-            let queues = self_3.logger.queues();
-            let flush_interval = FLUSH_INTERVAL / queues.len() as u32;
+            let queues = self_2.logger.queues();
+            let flush_interval = self_2.flush_interval / queues.len() as u32;
             let mut index = 0;
             loop {
+                if index == 0 {
+                    self_2.logger.clean();
+                }
                 tokio::time::delay_for(flush_interval).await;
                 let logger = &queues[index];
                 logger.clone().flush_now();

@@ -28,6 +28,7 @@ impl<'de> Deserialize<'de> for RoutingTable {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time;
 
     use serde::Deserialize;
 
@@ -98,10 +99,12 @@ mod tests {
             }
         , "big_query_service":
             { "queue_count": 5
+            , "flush_interval": { "secs": 123, "nanos": 0 }
             , "project_id": "PROJECT_ID"
             , "dataset_id": "DATASET_ID"
             , "table_id": "TABLE_ID"
             }
+        , "pre_stop_path": "/pre_stop"
         }"#).expect("valid json");
 
         assert_eq!(
@@ -132,6 +135,7 @@ mod tests {
                 big_query_service: Some(BigQueryServiceConfig {
                     queue_count: 5,
                     batch_capacity: 500,
+                    flush_interval: time::Duration::from_secs(123),
                     big_query: BigQueryConfig {
                         origin: "https://bigquery.googleapis.com".to_owned(),
                         project_id: "PROJECT_ID".to_owned(),
@@ -140,6 +144,7 @@ mod tests {
                         service_account_key_file: None,
                     },
                 }),
+                pre_stop_path: Some("/pre_stop".to_owned()),
             },
         );
     }

@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time;
 
 use log::info;
 use yup_oauth2 as oauth2;
@@ -22,13 +23,15 @@ pub struct LoggerConfig {
     /// <https://cloud.google.com/bigquery/quotas#streaming_inserts>.
     #[serde(default = "default_batch_capacity")]
     pub batch_capacity: usize,
+    #[serde(default = "default_flush_interval")]
+    pub flush_interval: time::Duration,
     #[serde(flatten)]
     pub big_query: BigQueryConfig,
 }
 
 fn default_batch_capacity() -> usize { 500 }
 //fn default_retry_interval() -> time::Duration { time::Duration::from_secs(5) }
-//fn default_flush_interval() -> time::Duration { time::Duration::from_secs(1) }
+fn default_flush_interval() -> time::Duration { time::Duration::from_secs(1) }
 
 impl<D> Logger<D>
 where
@@ -134,6 +137,7 @@ mod test_logger {
         static ref CONFIG: LoggerConfig = LoggerConfig {
             queue_count: 2,
             batch_capacity: 3,
+            flush_interval: time::Duration::from_secs(1),
             big_query: BigQueryConfig {
                 origin: testing::RECEIVER_ORIGIN.to_owned(),
                 project_id: "PROJECT_ID".to_owned(),

@@ -94,7 +94,7 @@ impl RouterService {
                 return Either::Right(err(self.make_reject(
                     ilp::ErrorCode::F02_UNREACHABLE,
                     b"invalid address segment",
-                )))
+                )));
             },
         };
 

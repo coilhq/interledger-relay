@@ -6,7 +6,7 @@ use bytes::{Bytes, BytesMut};
 use futures::future::{Either, Ready, ok};
 use futures::task::{Context, Poll};
 use hyper::service::Service as HyperService;
-use log::warn;
+use log::{debug, warn};
 use serde::de::{Deserialize, Deserializer, Error as _};
 
 type HTTPRequest = http::Request<hyper::Body>;
@@ -77,6 +77,7 @@ where
             },
             _ => Either::Right(ok({
                 warn!("invalid authorization: authorization={:?}", auth);
+                debug!("invalid authorization: headers={:?}", request.headers());
                 hyper::Response::builder()
                     .status(hyper::StatusCode::UNAUTHORIZED)
                     .body(hyper::Body::empty())

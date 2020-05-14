@@ -76,9 +76,8 @@ where
 
     async fn flush(self, rows: Vec<Row<D>>) {
         let count = rows.len();
-        trace!("flush: total_rows={}", count);
+        trace!("flush start: total_rows={}", count);
         let self_2 = self.clone();
-        //let self_3 = self.clone();
         let result = self.table.clone()
             .insert_all(rows)
             .await;
@@ -91,7 +90,7 @@ where
             Ok(()) => {},
             Err(error) => {
                 warn!(
-                    "flush: insert_all error: error={:?} retries={} total_rows={}",
+                    "flush insert_all error: error={:?} retries={} total_rows={}",
                     error.error, error.retries.len(), count,
                 );
                 debug_assert!(!error.retries.is_empty());
@@ -113,10 +112,17 @@ where
             .queue
             .len()
     }
+
+    pub fn is_idle(&self) -> bool {
+        let data = self.data.lock().unwrap();
+        data.queue.is_empty() && data.insert.is_none()
+    }
 }
 
 #[cfg(test)]
 mod test_logger_queue {
+    use std::time;
+
     use futures::prelude::*;
     use lazy_static::lazy_static;
 
@@ -129,6 +135,7 @@ mod test_logger_queue {
         static ref CONFIG: Arc<LoggerConfig> = Arc::new(LoggerConfig {
             queue_count: 2,
             batch_capacity: 3,
+            flush_interval: time::Duration::from_secs(1),
             big_query: BigQueryConfig {
                 origin: testing::RECEIVER_ORIGIN.to_owned(),
                 project_id: "PROJECT_ID".to_owned(),

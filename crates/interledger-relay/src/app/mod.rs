@@ -4,7 +4,7 @@ use std::time;
 
 pub use self::config::{ConnectorRoot, RelationConfig, SetupError};
 use crate::{Client, RoutingTable, StaticRoute};
-use crate::middlewares::{AuthTokenFilter, HealthCheckFilter, MethodFilter, Receiver};
+use crate::middlewares::{AuthTokenFilter, HealthCheckFilter, MethodFilter, PreStopFilter, Receiver};
 use crate::services::{BigQueryService, BigQueryServiceConfig};
 use crate::services::{ConfigService, DebugService, DebugServiceOptions, EchoService};
 use crate::services::{ExpiryService, FromPeerService, RouterService};
@@ -20,6 +20,7 @@ pub struct Config {
     pub root: ConnectorRoot,
     pub relatives: Vec<RelationConfig>,
     pub routes: Vec<StaticRoute>,
+    pub pre_stop_path: Option<String>,
     #[serde(default)]
     pub debug_service: DebugServiceOptions,
     #[serde(default)]
@@ -29,7 +30,7 @@ pub struct Config {
 // TODO This should be an existential type once they are stable.
 pub type Connector =
     // HTTP Middlewares:
-    HealthCheckFilter<MethodFilter<AuthTokenFilter<
+    PreStopFilter<HealthCheckFilter<MethodFilter<AuthTokenFilter<
         Receiver<
             // ILP Services:
             DebugService<ExpiryService<FromPeerService<
@@ -39,7 +40,7 @@ pub type Connector =
                 >>>
             >>>
         >
-    >>>;
+    >>>>;
 
 impl Config {
     pub async fn start(self) -> Result<Connector, SetupError> {
@@ -74,7 +75,7 @@ impl Config {
             echo_svc,
         ).await?;
 
-        let ildcp_svc = ConfigService::new(ildcp, big_query_svc);
+        let ildcp_svc = ConfigService::new(ildcp, big_query_svc.clone());
         let from_peer_svc =
             FromPeerService::new(address.clone(), peers, ildcp_svc);
         let expiry_svc =
@@ -86,7 +87,13 @@ impl Config {
         let receiver = Receiver::new(debug_svc);
         let auth_filter = AuthTokenFilter::new(auth_tokens, receiver);
         let method_filter = MethodFilter::new(hyper::Method::POST, auth_filter);
-        Ok(HealthCheckFilter::new(method_filter))
+        let health_filter = HealthCheckFilter::new(method_filter);
+        let pre_stop_filter = PreStopFilter::new(
+            self.pre_stop_path,
+            Box::new(move || Box::pin(big_query_svc.clone().stop())),
+            health_filter,
+        );
+        Ok(pre_stop_filter)
     }
 }
 
@@ -131,6 +138,7 @@ mod test_config {
             routes: testing::ROUTES.clone(),
             debug_service: DebugServiceOptions::default(),
             big_query_service: None,
+            pre_stop_path: None,
         };
 
         let future = connector
@@ -223,6 +231,7 @@ mod test_config {
             routes: testing::ROUTES.clone(),
             debug_service: DebugServiceOptions::default(),
             big_query_service: None,
+            pre_stop_path: None,
         }.start();
 
         let request = hyper::Client::new()
