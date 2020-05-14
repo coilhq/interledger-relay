@@ -83,8 +83,8 @@ where
 
         {
             let stopping = self.data.stopping.read().unwrap();
-            trace!("relay is stopping; dropping request");
             if *stopping {
+                trace!("relay is stopping; dropping request");
                 return Box::pin(future::ok(hyper::Response::builder()
                     .status(hyper::StatusCode::SERVICE_UNAVAILABLE) // 503
                     .body(hyper::Body::from("service stopping"))
