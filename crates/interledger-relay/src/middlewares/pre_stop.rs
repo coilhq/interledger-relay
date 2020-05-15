@@ -15,6 +15,8 @@ type StopFn = Box<
     >> + Send + Sync + 'static
 >;
 
+// TODO test middleware
+
 /// When the server receives a `GET` to the configured `pre_stop_path`, this
 /// middleware will:
 ///
