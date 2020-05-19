@@ -132,7 +132,11 @@ where
     fn call(self, request: Req) -> Self::Future {
         let prepare = request.borrow();
         let account = Arc::clone(request.from_account());
-        let destination = prepare.destination().to_address();
+        let destination = prepare.destination()
+            .split_connection_tag()
+            .map(|(addr, _tag)| addr)
+            .unwrap_or_else(|| prepare.destination())
+            .to_address();
         let amount = prepare.amount();
 
         Box::pin(async move {

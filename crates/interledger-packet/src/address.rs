@@ -173,6 +173,14 @@ impl<'a> Addr<'a> {
     fn as_str(&self) -> &str {
         str::from_utf8(self.0).unwrap()
     }
+
+    pub fn split_connection_tag(&self) -> Option<(Addr, &[u8])> {
+        self.0
+            .iter()
+            .enumerate()
+            .find(|(_index, chr)| **chr == b'~')
+            .map(|(index, _chr)| (Addr(&self.0[..index]), &self.0[index+1..]))
+    }
 }
 
 impl<'a> AsRef<[u8]> for Addr<'a> {
@@ -421,6 +429,19 @@ mod test_addr {
                 .with_suffix(b"12 34")
                 .is_err()
         });
+    }
+
+    #[test]
+    fn test_split_connection_tag() {
+        assert_eq!(Addr::new(b"test.alice").split_connection_tag(), None);
+        assert_eq!(
+            Addr::new(b"test.alice~1234~5678")
+                .split_connection_tag(),
+            Some((
+                Addr::new(b"test.alice"),
+                &b"1234~5678"[..],
+            )),
+        );
     }
 
     #[test]
