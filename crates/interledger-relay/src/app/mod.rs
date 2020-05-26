@@ -3,7 +3,7 @@ mod config;
 use std::time;
 
 pub use self::config::{ConnectorRoot, RelationConfig, SetupError};
-use crate::{Client, RoutingTable, StaticRoute};
+use crate::{Client, RoutingPartition, RoutingTable, RoutingTableData};
 use crate::middlewares::{AuthTokenFilter, HealthCheckFilter, MethodFilter, PreStopFilter, Receiver};
 use crate::services::{BigQueryService, BigQueryServiceConfig};
 use crate::services::{ConfigService, DebugService, DebugServiceOptions, EchoService};
@@ -19,8 +19,11 @@ const DEFAULT_MAX_TIMEOUT: time::Duration = time::Duration::from_secs(60);
 pub struct Config {
     pub root: ConnectorRoot,
     pub relatives: Vec<RelationConfig>,
-    pub routes: Vec<StaticRoute>,
+    pub routes: RoutingTableData,
+    #[serde(default)]
     pub pre_stop_path: Option<String>,
+    #[serde(default)]
+    pub routing_partition: RoutingPartition,
     #[serde(default)]
     pub debug_service: DebugServiceOptions,
     #[serde(default)]
@@ -67,7 +70,10 @@ impl Config {
 
         let client = Client::new(address.clone());
         // ILP packet services:
-        let router_svc = RouterService::new(client, RoutingTable::new(self.routes));
+        let router_svc = RouterService::new(client, RoutingTable::new(
+            self.routes.into(),
+            self.routing_partition,
+        ));
         let echo_svc = EchoService::new(address.clone(), router_svc);
         let big_query_svc = BigQueryService::new(
             address.clone(),
@@ -135,10 +141,11 @@ mod test_config {
                 asset_code: "XRP".to_owned(),
             },
             relatives: PEERS.clone(),
-            routes: testing::ROUTES.clone(),
+            routes: RoutingTableData(testing::ROUTES.clone()),
             debug_service: DebugServiceOptions::default(),
             big_query_service: None,
             pre_stop_path: None,
+            routing_partition: RoutingPartition::Destination,
         };
 
         let future = connector
@@ -228,10 +235,11 @@ mod test_config {
                 asset_code: "XRP".to_owned(),
             },
             relatives: PEERS.clone(),
-            routes: testing::ROUTES.clone(),
+            routes: RoutingTableData(testing::ROUTES.clone()),
             debug_service: DebugServiceOptions::default(),
             big_query_service: None,
             pre_stop_path: None,
+            routing_partition: RoutingPartition::Destination,
         }.start();
 
         let request = hyper::Client::new()

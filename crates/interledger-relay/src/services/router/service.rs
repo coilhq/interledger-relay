@@ -58,7 +58,7 @@ impl RouterService {
         -> impl Future<Output = Result<ilp::Fulfill, ilp::Reject>>
     {
         let routes = self.data.routes.read().unwrap();
-        let (route_index, route) = match routes.resolve(prepare.destination()) {
+        let (route_index, route) = match routes.resolve(&prepare) {
             Ok((i, route)) => (i, route),
             Err(RoutingError::NoRoute) => {
                 debug!(
@@ -70,7 +70,7 @@ impl RouterService {
                     b"no route exists",
                 )));
             },
-            Err(RoutingError::NoHeathyRoute) => {
+            Err(RoutingError::NoHealthyRoute) => {
                 debug!(
                     "no healthy route found: destination=\"{}\"",
                     prepare.destination(),
@@ -155,15 +155,16 @@ mod test_router_service {
     use hyper::Uri;
     use lazy_static::lazy_static;
 
-    use crate::{NextHop, RouteFailover, StaticRoute};
+    use crate::{NextHop, RouteFailover, RoutingPartition, StaticRoute};
     use crate::testing::{self, ADDRESS, RECEIVER_ORIGIN, ROUTES};
+    use super::super::table::RouteIndex;
     use super::*;
 
     lazy_static! {
         static ref CLIENT: Client = Client::new(ADDRESS.to_address());
         static ref ROUTER: RouterService = RouterService::new(
             CLIENT.clone(),
-            RoutingTable::new(ROUTES.clone()),
+            RoutingTable::new(ROUTES.clone(), RoutingPartition::default()),
         );
     }
 
@@ -211,7 +212,7 @@ mod test_router_service {
                 }),
                 ..ROUTES[0].clone()
             },
-        ]));
+        ], RoutingPartition::default()));
         testing::MockServer::new()
             .test_request(|req| { assert_eq!(req.uri().path(), "/alice"); })
             .test_body(|body| { assert_eq!(body.as_ref(), testing::PREPARE.as_ref()); })
@@ -226,8 +227,11 @@ mod test_router_service {
                     .call(testing::PREPARE.clone())
                     .map(move |result| {
                         assert!(result.is_err());
-                        let routes = router.data.routes.read().unwrap();
-                        let route = &routes.as_ref()[0];
+                        let table = router.data.routes.read().unwrap();
+                        let route = &table[RouteIndex {
+                            group_index: 0,
+                            route_index: 0,
+                        }];
                         assert_eq!(route.is_available(), false);
                     })
             });
@@ -269,7 +273,7 @@ mod test_router_service {
         }.build();
         let router = RouterService::new(
             CLIENT.clone(),
-            RoutingTable::new(vec![ROUTES[1].clone()]),
+            RoutingTable::new(vec![ROUTES[1].clone()], RoutingPartition::default()),
         );
         testing::MockServer::new().run({
             router
@@ -291,7 +295,7 @@ mod test_router_service {
                     auth: None,
                 },
             ),
-        ]));
+        ], RoutingPartition::default()));
         testing::MockServer::new()
             .test_request(|req| {
                 assert_eq!(req.uri().path(), "/new_alice");

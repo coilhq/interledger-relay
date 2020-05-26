@@ -1,4 +1,4 @@
-FROM rust:1.42-slim
+FROM rust:1.43-slim
 WORKDIR /app
 
 COPY . ./

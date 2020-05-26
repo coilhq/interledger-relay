@@ -45,6 +45,7 @@ impl DynamicRoute {
         DynamicRoute { config, status }
     }
 
+    #[cfg(test)]
     pub fn with_status(config: StaticRoute, status: RouteStatus) -> Self {
         DynamicRoute {
             config,
@@ -146,6 +147,7 @@ mod test_dynamic_route {
                 fail_ratio: 0.06,
                 fail_duration: 2 * SECOND,
             }),
+            partition: 1.0,
         };
     }
 

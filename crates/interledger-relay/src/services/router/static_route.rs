@@ -10,12 +10,24 @@ use serde::Deserialize;
 use crate::AuthToken;
 use crate::serde::deserialize_uri;
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StaticRoute {
     pub target_prefix: Bytes,
     pub next_hop: NextHop,
     pub failover: Option<RouteFailover>,
+    /// Positive shares of the packets. For example, given the following routes
+    /// to a destination.
+    /// - *A*: `partition: 2.0`
+    /// - *B*: `partition: 1.0`
+    /// - *C*: `partition: 1.0`
+    /// Assuming all three routes are available:
+    /// - Route *A* receives 50% of all Prepares.
+    /// - Route *B* receives 25% of all Prepares.
+    /// - Route *C* receives the remaining 25% of all prepares.
+    ///
+    /// If the partitions of all hops to a destination sum to `1.0`, the individual
+    /// partition values can be interpreted as the fraction of packets assigned.
+    pub partition: f64,
 }
 
 /// Explanation of multilateral mode:
@@ -49,14 +61,21 @@ pub struct RouteFailover {
 
 impl StaticRoute {
     #[cfg(test)]
-    pub fn new(
+    pub fn new(target_prefix: Bytes, next_hop: NextHop) -> Self {
+        Self::new_with_partition(target_prefix, next_hop, 1.0)
+    }
+
+    #[cfg(test)]
+    pub fn new_with_partition(
         target_prefix: Bytes,
         next_hop: NextHop,
+        partition: f64,
     ) -> Self {
         StaticRoute {
             target_prefix,
             next_hop,
             failover: None,
+            partition,
         }
     }
 

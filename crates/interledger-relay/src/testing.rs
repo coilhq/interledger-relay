@@ -66,6 +66,7 @@ lazy_static! {
                 auth: Some(AuthToken::new("alice_auth")),
             },
             failover: None,
+            partition: 1.0,
         },
         StaticRoute {
             target_prefix: Bytes::from("test.relay."),
@@ -75,6 +76,7 @@ lazy_static! {
                 auth: Some(AuthToken::new("bob_auth")),
             },
             failover: None,
+            partition: 1.0,
         },
         StaticRoute {
             target_prefix: Bytes::from(""),
@@ -83,6 +85,7 @@ lazy_static! {
                 auth: Some(AuthToken::new("default_auth")),
             },
             failover: None,
+            partition: 1.0,
         },
     ];
 }

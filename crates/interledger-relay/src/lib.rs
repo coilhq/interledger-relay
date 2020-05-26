@@ -14,7 +14,7 @@ use futures::prelude::*;
 pub use self::client::Client;
 pub use self::middlewares::AuthToken;
 pub use self::services::{BigQueryConfig, BigQueryServiceConfig, DebugServiceOptions};
-pub use self::services::{NextHop, RouteFailover, RoutingTable, StaticRoute};
+pub use self::services::{NextHop, RouteFailover, RoutingPartition, RoutingTable, RoutingTableData, StaticRoute};
 
 // TODO maybe support ping protocol
 

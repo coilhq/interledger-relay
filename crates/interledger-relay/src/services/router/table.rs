@@ -1,4 +1,6 @@
-use super::{DynamicRoute, StaticRoute};
+use bytes::Bytes;
+
+use super::{DynamicRoute, RoutingPartition, StaticRoute};
 
 // TODO validate target prefixes
 // TODO lint route order: check for unreachable; verify trailing "."
@@ -8,24 +10,52 @@ use super::{DynamicRoute, StaticRoute};
 /// Resolution is first-to-last, so the catch-all route (if any) should be the
 /// last item.
 #[derive(Debug)]
-pub struct RoutingTable(Vec<DynamicRoute>);
+pub struct RoutingTable {
+    partition_by: RoutingPartition,
+    groups: Vec<RouteGroup>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RoutingError {
     NoRoute,
     /// One or more routes to the destination exist in the table, but all are
     /// unhealthy.
-    NoHeathyRoute,
+    NoHealthyRoute,
+}
+
+/// A set of routes that share a target prefix.
+#[derive(Debug)]
+struct RouteGroup {
+    target_prefix: Bytes,
+    routes: Vec<DynamicRoute>,
+}
+
+/// Uniquely identify a route within a `RoutingTable`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RouteIndex {
+    /// Index within `RoutingTable.groups`.
+    pub(crate) group_index: usize,
+    /// Index within `RouteGroup.routes`.
+    pub(crate) route_index: usize,
 }
 
 impl RoutingTable {
-    #[inline]
-    pub fn new(routes: Vec<StaticRoute>) -> Self {
-        let routes = routes
-            .into_iter()
-            .map(DynamicRoute::new)
-            .collect::<Vec<_>>();
-        RoutingTable(routes)
+    pub fn new(routes: Vec<StaticRoute>, partition_by: RoutingPartition) -> Self {
+        let mut groups = Vec::<RouteGroup>::new();
+        for route in routes {
+            let existing_group = groups
+                .iter_mut()
+                .find(|group| group.target_prefix == route.target_prefix);
+            if let Some(group) = existing_group {
+                group.routes.push(DynamicRoute::new(route));
+            } else {
+                groups.push(RouteGroup {
+                    target_prefix: route.target_prefix.clone(),
+                    routes: vec![DynamicRoute::new(route)],
+                });
+            }
+        }
+        RoutingTable { groups, partition_by }
     }
 
     /// Return the first matching, healthy route (and its index).
@@ -33,57 +63,82 @@ impl RoutingTable {
     /// If a route with prefix `"foo.bar."` matches (even if it is unhealthy),
     /// then all subsequent matches must have the same prefix (this is used for
     /// fallback routes).
-    pub fn resolve<'a>(&'a self, destination: ilp::Addr<'a>)
-        -> Result<(usize, &'a DynamicRoute), RoutingError>
+    pub(crate) fn resolve<'a>(&'a self, prepare: &'a ilp::Prepare)
+        -> Result<(RouteIndex, &'a DynamicRoute), RoutingError>
     {
-        let mut route_exists = false;
-        self.resolve_static(destination)
-            .find(|(_i, route)| {
-                route_exists = true;
-                route.is_available()
-            })
-            .ok_or(if route_exists {
-                RoutingError::NoHeathyRoute
-            } else {
-                RoutingError::NoRoute
-            })
-    }
-
-    fn resolve_static<'a>(&'a self, destination: ilp::Addr<'a>)
-        -> impl Iterator<Item = (usize, &DynamicRoute)> + 'a
-    {
-        let mut first_hit = None;
-        self.0
+        let (group_index, group) = self
+            .resolve_group(prepare.destination())
+            .ok_or(RoutingError::NoRoute)?;
+        let mut available_routes = group.routes
             .iter()
             .enumerate()
-            .filter(move |(_index, route)| {
-                let target_prefix = &route.config.target_prefix;
-                match first_hit {
-                    Some(exact_prefix) => target_prefix == exact_prefix,
-                    None => {
-                        let matches =
-                            destination.as_ref().starts_with(target_prefix);
-                        if matches { first_hit = Some(target_prefix); }
-                        matches
-                    },
-                }
+            .filter(|(_i, route)| route.is_available())
+            .peekable();
+        // Recompute the total partitions every `resolve` so that it only includes
+        // available routes.
+        let total_partitions = available_routes
+            .clone()
+            .map(|(_i, route)| route.config.partition)
+            .sum::<f64>();
+
+        let mut position = if group.routes.len() > 1 {
+            self.partition_by.find(prepare)
+        } else {
+            // Don't bother to compute the hash unnecessarily.
+            0.0
+        };
+
+        while let Some((route_index, route)) = available_routes.next() {
+            let fraction = route.config.partition / total_partitions;
+            if position <= fraction || available_routes.peek().is_none() {
+                // The last matching available route is always used as a catch-all.
+                return Ok((RouteIndex { group_index, route_index }, route));
+            }
+            // Shift `position` down so that it fits in the upcoming partitions.
+            position -= fraction;
+        }
+
+        Err(RoutingError::NoHealthyRoute)
+    }
+
+    fn resolve_group<'a>(&'a self, destination: ilp::Addr<'a>)
+        -> Option<(usize, &'a RouteGroup)>
+    {
+        self.groups
+            .iter()
+            .enumerate()
+            .find(|(_index, group)| {
+                destination.as_ref().starts_with(&group.target_prefix)
             })
     }
 
-    pub(crate) fn update(&self, index: usize, is_success: bool) {
-        self.0[index].update(is_success)
+    pub(crate) fn update(&self, index: RouteIndex, is_success: bool) {
+        self.groups[index.group_index]
+            .routes[index.route_index]
+            .update(is_success)
     }
 }
 
-impl AsRef<[DynamicRoute]> for RoutingTable {
-    fn as_ref(&self) -> &[DynamicRoute] {
-        &self.0
+#[cfg(test)]
+impl RouteIndex {
+    pub const fn new(group_index: usize, route_index: usize) -> Self {
+        RouteIndex { group_index, route_index }
     }
 }
 
-impl Default for RoutingTable {
-    fn default() -> Self {
-        RoutingTable::new(Vec::new())
+#[cfg(test)]
+impl std::ops::Index<RouteIndex> for RoutingTable {
+    type Output = DynamicRoute;
+    fn index(&self, index: RouteIndex) -> &Self::Output {
+        &self.groups[index.group_index].routes[index.route_index]
+    }
+}
+
+#[cfg(test)]
+impl std::ops::Index<(usize, usize)> for RoutingTable {
+    type Output = DynamicRoute;
+    fn index(&self, (group_index, route_index): (usize, usize)) -> &Self::Output {
+        &self.groups[group_index].routes[route_index]
     }
 }
 
@@ -111,58 +166,55 @@ mod test_routing_table {
             StaticRoute::new(Bytes::from("test.one"), HOP_0.clone()),
             StaticRoute::new(Bytes::from("test.two"), HOP_1.clone()),
             StaticRoute::new(Bytes::from("test."), HOP_2.clone()),
-        ]);
-        let routes = &table.0;
+        ], RoutingPartition::default());
 
         let tests = &[
             // Exact match.
-            ("test.one", Ok((0, &routes[0]))),
+            ("test.one", Ok(RouteIndex::new(0, 0))),
             // Prefix match.
-            ("test.one.alice", Ok((0, &routes[0]))),
-            ("test.two.bob", Ok((1, &routes[1]))),
-            ("test.three", Ok((2, &routes[2]))),
+            ("test.one.alice", Ok(RouteIndex::new(0, 0))),
+            ("test.two.bob", Ok(RouteIndex::new(1, 0))),
+            ("test.three", Ok(RouteIndex::new(2, 0))),
             // Dot separator isn't necessary.
-            ("test.two__", Ok((1, &routes[1]))),
+            ("test.two__", Ok(RouteIndex::new(1, 0))),
             // Unhealthy
             // No matching prefix.
             ("example.test.one", Err(RoutingError::NoRoute)),
             ("g.alice", Err(RoutingError::NoRoute)),
         ];
 
-        for (addr, resolve) in tests {
+        for (addr, index) in tests {
             let addr = addr.as_bytes();
-            assert_eq!(table.resolve(ilp::Addr::new(addr)), *resolve);
+            let expect = index.map(|index| (index, &table[index]));
+            assert_eq!(table.resolve(&make_prepare(addr)), expect);
         }
     }
 
     #[test]
     fn test_resolve_unhealthy() {
-        let mut table = RoutingTable::new(vec![
+        let table = RoutingTable::new(vec![
             StaticRoute::new(Bytes::from("test.one"), HOP_0.clone()),
-            // This route will be skipped because fallback the route's prefix
-            // must exactly match the first route's prefix.
-            StaticRoute::new(Bytes::from("test.one.abc"), HOP_1.clone()),
-            StaticRoute::new(Bytes::from("test.one"), HOP_2.clone()),
-        ]);
+            StaticRoute::new_with_partition(Bytes::from("test.one"), HOP_2.clone(), 0.0),
+        ], RoutingPartition::default());
         assert_eq!(
-            table.resolve(ilp::Addr::new(b"test.one.a")),
-            Ok((0, &table.as_ref()[0])),
+            table.resolve(&make_prepare(b"test.one.a")),
+            Ok((RouteIndex::new(0, 0), &table[(0, 0)])),
         );
 
-        *table.0[0].status.write().unwrap() = RouteStatus::Unhealthy {
+        *table[(0, 0)].status.write().unwrap() = RouteStatus::Unhealthy {
             until: time::Instant::now() + time::Duration::from_secs(1),
         };
         assert_eq!(
-            table.resolve(ilp::Addr::new(b"test.one.a")),
-            Ok((2, &table.as_ref()[2])),
+            table.resolve(&make_prepare(b"test.one.a")),
+            Ok((RouteIndex::new(0, 1), &table[(0, 1)])),
         );
 
-        *table.0[2].status.write().unwrap() = RouteStatus::Unhealthy {
+        *table[(0, 1)].status.write().unwrap() = RouteStatus::Unhealthy {
             until: time::Instant::now() + time::Duration::from_secs(1),
         };
         assert_eq!(
-            table.resolve(ilp::Addr::new(b"test.one.a")),
-            Err(RoutingError::NoHeathyRoute),
+            table.resolve(&make_prepare(b"test.one.a")),
+            Err(RoutingError::NoHealthyRoute),
         );
     }
 
@@ -172,10 +224,63 @@ mod test_routing_table {
             StaticRoute::new(Bytes::from("test.one"), HOP_0.clone()),
             StaticRoute::new(Bytes::from("test.two"), HOP_1.clone()),
             StaticRoute::new(Bytes::from(""), HOP_2.clone()),
-        ]);
+        ], RoutingPartition::default());
         assert_eq!(
-            table.resolve(ilp::Addr::new(b"example.test.one")),
-            Ok((2, &table.0[2])),
+            table.resolve(&make_prepare(b"example.test.one")),
+            Ok((RouteIndex::new(2, 0), &table[(2, 0)])),
         );
+    }
+
+    #[test]
+    fn test_resolve_partition() {
+        let table = RoutingTable::new(vec![
+            StaticRoute::new_with_partition(Bytes::from("test.one."), HOP_0.clone(), 0.50),
+            StaticRoute::new_with_partition(Bytes::from("test.one."), HOP_1.clone(), 0.25),
+            StaticRoute::new_with_partition(Bytes::from("test.one."), HOP_1.clone(), 0.25),
+        ], RoutingPartition::Destination);
+
+        let mut counts = [0_i32; 3];
+        for i in 0..10_000 {
+            let (index, _route) =
+                table.resolve(&make_prepare(&alice(i))).unwrap();
+            counts[index.route_index] += 1;
+        }
+        // Ensure that the partitions are (mostly) balanced.
+        assert!((counts[0] - 5_000).abs() < 100);
+        assert!((counts[1] - 2_500).abs() < 100);
+        assert!((counts[2] - 2_500).abs() < 100);
+
+        // When the first route is down, all traffic is routed to the remaining route.
+        *table[(0, 0)].status.write().unwrap() = RouteStatus::Unhealthy {
+            until: time::Instant::now() + time::Duration::from_secs(1),
+        };
+
+        let mut counts = [0_i32; 3];
+        for i in 0..10_000 {
+            let (index, _route) =
+                table.resolve(&make_prepare(&alice(i))).unwrap();
+            counts[index.route_index] += 1;
+        }
+        assert_eq!(counts[0], 0);
+        assert!((counts[1] - 5_000).abs() < 100);
+        assert!((counts[2] - 5_000).abs() < 100);
+    }
+
+    fn make_prepare(address: &[u8]) -> ilp::Prepare {
+        ilp::PrepareBuilder {
+            amount: 123,
+            expires_at: std::time::SystemTime::now()
+                + std::time::Duration::from_secs(20),
+            execution_condition: b"\
+                \x11\x7b\x43\x4f\x1a\x54\xe9\x04\x4f\x4f\x54\x92\x3b\x2c\xff\x9e\
+                \x4a\x6d\x42\x0a\xe2\x81\xd5\x02\x5d\x7b\xb0\x40\xc4\xb4\xc0\x4a\
+            ",
+            destination: ilp::Addr::try_from(address).unwrap(),
+            data: b"prepare data",
+        }.build()
+    }
+
+    fn alice(n: usize) -> Vec<u8> {
+        format!("test.one.alice.{}", n).into_bytes()
     }
 }

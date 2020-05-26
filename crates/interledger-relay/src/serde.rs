@@ -1,8 +1,6 @@
 use hyper::Uri;
 use serde::de::{self, Deserialize, Deserializer};
 
-use crate::{RoutingTable, StaticRoute};
-
 pub fn deserialize_uri<'de, D>(deserializer: D) -> Result<Uri, D::Error>
 where
     D: Deserializer<'de>,
@@ -12,19 +10,6 @@ where
         .map_err(de::Error::custom)
 }
 
-impl<'de> Deserialize<'de> for RoutingTable {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        struct TableData(Vec<StaticRoute>);
-
-        let table_data = TableData::deserialize(deserializer)?;
-        Ok(RoutingTable::new(table_data.0))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -32,7 +17,7 @@ mod tests {
 
     use serde::Deserialize;
 
-    use crate::{AuthToken, BigQueryConfig, BigQueryServiceConfig, DebugServiceOptions};
+    use crate::{AuthToken, BigQueryConfig, BigQueryServiceConfig, DebugServiceOptions, RoutingPartition, RoutingTableData};
     use crate::app::{Config, ConnectorRoot, RelationConfig};
     use crate::testing::ROUTES;
     use super::*;
@@ -76,22 +61,32 @@ mod tests {
             }
           ]
         , "routes":
-          [ { "target_prefix": "test.alice."
-            , "next_hop":
-              { "type": "Bilateral"
-              , "endpoint": "http://127.0.0.1:3001/alice"
-              , "auth": "alice_auth"
+          { "test.alice.":
+            [ { "next_hop":
+                { "type": "Bilateral"
+                , "endpoint": "http://127.0.0.1:3001/alice"
+                , "auth": "alice_auth"
+                }
               }
-            }
-          , { "target_prefix": "test.relay."
-            , "next_hop":
-              { "type": "Multilateral"
-              , "endpoint_prefix": "http://127.0.0.1:3001/bob/"
-              , "endpoint_suffix": "/ilp"
-              , "auth": "bob_auth"
+            ]
+          , "test.relay.":
+            [ { "next_hop":
+                { "type": "Multilateral"
+                , "endpoint_prefix": "http://127.0.0.1:3001/bob/"
+                , "endpoint_suffix": "/ilp"
+                , "auth": "bob_auth"
+                }
               }
-            }
-          ]
+            ]
+          , "":
+            [ { "next_hop":
+                { "type": "Bilateral"
+                , "endpoint": "http://127.0.0.1:3001/default"
+                , "auth": "default_auth"
+                }
+              }
+            ]
+          }
         , "debug_service":
             { "log_prepare": false
             , "log_fulfill": false
@@ -105,6 +100,7 @@ mod tests {
             , "table_id": "TABLE_ID"
             }
         , "pre_stop_path": "/pre_stop"
+        , "routing_partition": "ExecutionCondition"
         }"#).expect("valid json");
 
         assert_eq!(
@@ -126,7 +122,7 @@ mod tests {
                         auth: vec![AuthToken::new("parent_secret")],
                     },
                 ],
-                routes: ROUTES[0..=1].to_vec(),
+                routes: RoutingTableData(ROUTES.to_vec()),
                 debug_service: DebugServiceOptions {
                     log_prepare: false,
                     log_fulfill: false,
@@ -145,6 +141,7 @@ mod tests {
                     },
                 }),
                 pre_stop_path: Some("/pre_stop".to_owned()),
+                routing_partition: RoutingPartition::ExecutionCondition,
             },
         );
     }
