@@ -33,8 +33,14 @@ impl<'de> Deserialize<'de> for RoutingTableData {
             .cloned()
             .collect::<Vec<_>>();
         // Order prefixes from longest-to-shortest so that long prefixes don't
-        // get masked by short ones.
-        prefixes.sort_unstable_by_key(|prefix| usize::MAX - prefix.len());
+        // get masked by short ones. For same-length prefixes, use alphabetical
+        // order to make it deterministic.
+        prefixes.sort_unstable_by(|prefix_1, prefix_2| {
+            prefix_1.len()
+                .cmp(&prefix_2.len())
+                .reverse()
+                .then_with(|| prefix_1.cmp(prefix_2))
+        });
 
         let mut routes = Vec::new();
         for prefix in prefixes {
