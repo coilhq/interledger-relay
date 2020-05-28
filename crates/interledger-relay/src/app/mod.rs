@@ -2,6 +2,8 @@ mod config;
 
 use std::time;
 
+use log::debug;
+
 pub use self::config::{ConnectorRoot, RelationConfig, SetupError};
 use crate::{Client, RoutingPartition, RoutingTable, RoutingTableData};
 use crate::middlewares::{AuthTokenFilter, HealthCheckFilter, MethodFilter, PreStopFilter, Receiver};
@@ -48,6 +50,7 @@ pub type Connector =
 impl Config {
     pub async fn start(self) -> Result<Connector, SetupError> {
         let ildcp = self.root.load_config().await?;
+        debug!("starting with ildcp_response={:?}", ildcp);
         self.start_with_ildcp(ildcp).await
     }
 
