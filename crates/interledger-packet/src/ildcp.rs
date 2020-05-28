@@ -1,3 +1,4 @@
+use std::fmt;
 use std::time::{Duration, SystemTime};
 
 use byteorder::ReadBytesExt;
@@ -54,7 +55,7 @@ impl From<Request> for Prepare {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct Response {
     buffer: Bytes,
     asset_scale: u8,
@@ -114,6 +115,16 @@ impl Response {
         (&self.buffer[self.asset_code_offset..])
             .peek_var_octet_string()
             .unwrap()
+    }
+}
+
+impl fmt::Debug for Response {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.debug_struct("Response")
+            .field("client_address", &self.client_address())
+            .field("asset_scale", &self.asset_scale())
+            .field("asset_code", &self.asset_code())
+            .finish()
     }
 }
 
