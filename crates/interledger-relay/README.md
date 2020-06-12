@@ -103,6 +103,7 @@ When `failover` is configured on a sub-route, the connector will track "failures
 A _failure_ in this context is either:
 - An HTTP connection error.
 - A HTTP `5xx` status code.
+- A `T01` ILP rejection originating from the peer.
 
 While a sub-route is _unavailable_:
 - Prepare packets are sent on alternate sub-routes. During this time, the sub-route is excluded from the `total_partitions` calculation. A sub-route becomes available again once its `fail_duration` has expired.
