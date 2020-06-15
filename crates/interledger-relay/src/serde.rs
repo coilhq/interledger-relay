@@ -67,6 +67,7 @@ mod tests {
                 , "endpoint": "http://127.0.0.1:3001/alice"
                 , "auth": "alice_auth"
                 }
+              , "account": "alice"
               }
             ]
           , "test.relay.":
@@ -76,6 +77,7 @@ mod tests {
                 , "endpoint_suffix": "/ilp"
                 , "auth": "bob_auth"
                 }
+              , "account": "bob"
               }
             ]
           , "":
@@ -84,6 +86,7 @@ mod tests {
                 , "endpoint": "http://127.0.0.1:3001/default"
                 , "auth": "default_auth"
                 }
+              , "account": "default"
               }
             ]
           }

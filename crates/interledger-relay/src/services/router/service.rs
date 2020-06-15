@@ -19,7 +19,7 @@ pub struct RouterService {
 #[derive(Debug)]
 struct ServiceData {
     address: ilp::Address,
-    routes: RwLock<RoutingTable>,
+    routes: Arc<RwLock<RoutingTable>>,
 }
 
 impl<Req> Service<Req> for RouterService
@@ -38,11 +38,12 @@ where
 }
 
 impl RouterService {
-    pub fn new(client: Client, routes: RoutingTable) -> Self {
+    pub fn new(client: Client, routes: Arc<RwLock<RoutingTable>>) -> Self {
         RouterService {
             data: Arc::new(ServiceData {
                 address: client.address().clone(),
-                routes: RwLock::new(routes),
+                //routes: RwLock::new(routes),
+                routes,
             }),
             client,
         }
@@ -164,7 +165,9 @@ mod test_router_service {
         static ref CLIENT: Client = Client::new(ADDRESS.to_address());
         static ref ROUTER: RouterService = RouterService::new(
             CLIENT.clone(),
-            RoutingTable::new(ROUTES.clone(), RoutingPartition::default()),
+            Arc::new(RwLock::new({
+                RoutingTable::new(ROUTES.clone(), RoutingPartition::default())
+            })),
         );
     }
 
@@ -203,7 +206,7 @@ mod test_router_service {
 
     #[test]
     fn test_mark_as_unhealthy() {
-        let router = RouterService::new(CLIENT.clone(), RoutingTable::new(vec![
+        let router = RouterService::new(CLIENT.clone(), Arc::new(RwLock::new(RoutingTable::new(vec![
             StaticRoute {
                 failover: Some(RouteFailover {
                     window_size: 20,
@@ -212,7 +215,7 @@ mod test_router_service {
                 }),
                 ..ROUTES[0].clone()
             },
-        ], RoutingPartition::default()));
+        ], RoutingPartition::default()))));
         testing::MockServer::new()
             .test_request(|req| { assert_eq!(req.uri().path(), "/alice"); })
             .test_body(|body| { assert_eq!(body.as_ref(), testing::PREPARE.as_ref()); })
@@ -273,7 +276,9 @@ mod test_router_service {
         }.build();
         let router = RouterService::new(
             CLIENT.clone(),
+            Arc::new(RwLock::new(
             RoutingTable::new(vec![ROUTES[1].clone()], RoutingPartition::default()),
+            )),
         );
         testing::MockServer::new().run({
             router
@@ -290,6 +295,7 @@ mod test_router_service {
         router.set_routes(RoutingTable::new(vec![
             StaticRoute::new(
                 Bytes::from("test.alice."),
+                "alice",
                 NextHop::Bilateral {
                     endpoint: format!("{}/new_alice", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
                     auth: None,

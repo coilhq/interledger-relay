@@ -12,7 +12,7 @@ use log::{debug, warn};
 use yup_oauth2 as oauth2;
 
 pub use self::table::BigQueryConfig;
-use crate::Service;
+use crate::{RoutingTable, Service};
 use crate::services::RequestWithFrom;
 use self::client::{BigQueryClient, BigQueryError};
 use self::logger::{Logger, LoggerConfig};
@@ -27,6 +27,7 @@ type Row = self::table::Row<RowData>;
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct RowData {
     pub account: Arc<String>,
+    pub to_account: Arc<String>,
     pub destination: ilp::Address,
     pub amount: u64,
     #[serde(serialize_with = "serialize_timestamp")]
@@ -40,6 +41,7 @@ pub struct BigQueryService<S> {
     address: ilp::Address,
     next: S,
     flush_interval: time::Duration,
+    routes: Arc<std::sync::RwLock<RoutingTable>>,
     logger: Arc<Logger<RowData>>,
 }
 
@@ -51,6 +53,7 @@ where
     pub async fn new(
         address: ilp::Address,
         config: Option<LoggerConfig>,
+        routes: Arc<std::sync::RwLock<RoutingTable>>,
         next: S,
     ) -> Result<Self, oauth2::Error> {
         let has_config = config.is_some();
@@ -66,6 +69,7 @@ where
             address,
             next,
             flush_interval,
+            routes,
             logger: Arc::new(logger),
         };
         if has_config {
@@ -139,6 +143,14 @@ where
             .to_address();
         let amount = prepare.amount();
 
+        let to_account = {
+            let routes = self.routes.read().unwrap();
+            routes
+                .resolve(prepare)
+                .ok()
+                .map(|(_index, route)| Arc::clone(&route.config.account))
+        };
+
         Box::pin(async move {
             if self.logger.is_dummy() {
                 return self.next.clone().call(request).await;
@@ -158,8 +170,11 @@ where
             }
 
             let fulfill = self.next.clone().call(request).await?;
+            // XXX this is a hack
+            let to_account = to_account.unwrap_or_else(|| Arc::new("unknown".to_owned()));
             self.logger.write(Row::new(RowData {
                 account,
+                to_account,
                 destination,
                 amount,
                 fulfill_time: time::SystemTime::now(),
@@ -195,6 +210,7 @@ mod test_big_query_service {
     fn test_serialize_row_data() {
         const EXPECT: &str = r#"{
   "account": "ACCOUNT",
+  "to_account": "TO_ACCOUNT",
   "destination": "test.relay",
   "amount": 123,
   "fulfill_time": "2020-05-06T07:08:09.000000Z"
@@ -205,6 +221,7 @@ mod test_big_query_service {
         assert_eq!(
             serde_json::to_string_pretty(&RowData {
                 account: Arc::new("ACCOUNT".to_owned()),
+                to_account: Arc::new("TO_ACCOUNT".to_owned()),
                 destination: testing::ADDRESS.to_address(),
                 amount:  123,
                 fulfill_time,

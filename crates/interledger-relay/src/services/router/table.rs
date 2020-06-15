@@ -163,9 +163,9 @@ mod test_routing_table {
     #[test]
     fn test_resolve() {
         let table = RoutingTable::new(vec![
-            StaticRoute::new(Bytes::from("test.one"), HOP_0.clone()),
-            StaticRoute::new(Bytes::from("test.two"), HOP_1.clone()),
-            StaticRoute::new(Bytes::from("test."), HOP_2.clone()),
+            StaticRoute::new(Bytes::from("test.one"), "one", HOP_0.clone()),
+            StaticRoute::new(Bytes::from("test.two"), "two", HOP_1.clone()),
+            StaticRoute::new(Bytes::from("test."), "default", HOP_2.clone()),
         ], RoutingPartition::default());
 
         let tests = &[
@@ -193,8 +193,8 @@ mod test_routing_table {
     #[test]
     fn test_resolve_unhealthy() {
         let table = RoutingTable::new(vec![
-            StaticRoute::new(Bytes::from("test.one"), HOP_0.clone()),
-            StaticRoute::new_with_partition(Bytes::from("test.one"), HOP_2.clone(), 0.0),
+            StaticRoute::new(Bytes::from("test.one"), "one", HOP_0.clone()),
+            StaticRoute::new_with_partition(Bytes::from("test.one"), "two", HOP_2.clone(), 0.0),
         ], RoutingPartition::default());
         assert_eq!(
             table.resolve(&make_prepare(b"test.one.a")),
@@ -221,9 +221,9 @@ mod test_routing_table {
     #[test]
     fn test_resolve_catch_all() {
         let table = RoutingTable::new(vec![
-            StaticRoute::new(Bytes::from("test.one"), HOP_0.clone()),
-            StaticRoute::new(Bytes::from("test.two"), HOP_1.clone()),
-            StaticRoute::new(Bytes::from(""), HOP_2.clone()),
+            StaticRoute::new(Bytes::from("test.one"), "one", HOP_0.clone()),
+            StaticRoute::new(Bytes::from("test.two"), "two", HOP_1.clone()),
+            StaticRoute::new(Bytes::from(""), "default", HOP_2.clone()),
         ], RoutingPartition::default());
         assert_eq!(
             table.resolve(&make_prepare(b"example.test.one")),
@@ -234,9 +234,9 @@ mod test_routing_table {
     #[test]
     fn test_resolve_partition() {
         let table = RoutingTable::new(vec![
-            StaticRoute::new_with_partition(Bytes::from("test.one."), HOP_0.clone(), 0.50),
-            StaticRoute::new_with_partition(Bytes::from("test.one."), HOP_1.clone(), 0.25),
-            StaticRoute::new_with_partition(Bytes::from("test.one."), HOP_1.clone(), 0.25),
+            StaticRoute::new_with_partition(Bytes::from("test.one."), "one", HOP_0.clone(), 0.50),
+            StaticRoute::new_with_partition(Bytes::from("test.one."), "two", HOP_1.clone(), 0.25),
+            StaticRoute::new_with_partition(Bytes::from("test.one."), "three", HOP_1.clone(), 0.25),
         ], RoutingPartition::Destination);
 
         let mut counts = [0_i32; 3];

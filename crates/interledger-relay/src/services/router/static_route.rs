@@ -1,5 +1,6 @@
 use std::error;
 use std::fmt;
+use std::sync::Arc;
 use std::time;
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -14,6 +15,7 @@ use crate::serde::deserialize_uri;
 pub struct StaticRoute {
     pub target_prefix: Bytes,
     pub next_hop: NextHop,
+    pub account: Arc<String>,
     pub failover: Option<RouteFailover>,
     /// Positive shares of the packets. For example, given the following routes
     /// to a destination.
@@ -61,18 +63,20 @@ pub struct RouteFailover {
 
 impl StaticRoute {
     #[cfg(test)]
-    pub fn new(target_prefix: Bytes, next_hop: NextHop) -> Self {
-        Self::new_with_partition(target_prefix, next_hop, 1.0)
+    pub fn new(target_prefix: Bytes, account: &str, next_hop: NextHop) -> Self {
+        Self::new_with_partition(target_prefix, account, next_hop, 1.0)
     }
 
     #[cfg(test)]
     pub fn new_with_partition(
         target_prefix: Bytes,
+        account: &str,
         next_hop: NextHop,
         partition: f64,
     ) -> Self {
         StaticRoute {
             target_prefix,
+            account: Arc::new(account.to_owned()), // XXX
             next_hop,
             failover: None,
             partition,
@@ -191,6 +195,7 @@ mod test_static_route {
 
         static ref BI: StaticRoute = StaticRoute::new(
             Bytes::from("test.alice."),
+            "account1",
             NextHop::Bilateral {
                 endpoint: BI_URI.clone(),
                 auth: Some(AuthToken::new("alice_auth")),
@@ -199,6 +204,7 @@ mod test_static_route {
 
         static ref MULTI: StaticRoute = StaticRoute::new(
             Bytes::from("test.relay."),
+            "account2",
             NextHop::Multilateral {
                 endpoint_prefix: Bytes::from("http://example.com/bob/"),
                 endpoint_suffix: Bytes::from("/ilp"),

@@ -141,6 +141,7 @@ mod test_dynamic_route {
     lazy_static! {
         static ref ROUTE: StaticRoute = StaticRoute {
             target_prefix: Bytes::from("test.alice"),
+            account: std::sync::Arc::new("alice".to_owned()),
             next_hop: testing::ROUTES[0].next_hop.clone(),
             failover: Some(RouteFailover {
                 window_size: 20,

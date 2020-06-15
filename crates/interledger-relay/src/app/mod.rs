@@ -72,15 +72,17 @@ impl Config {
             .collect::<Result<Vec<_>, _>>()?;
 
         let client = Client::new(address.clone());
-        // ILP packet services:
-        let router_svc = RouterService::new(client, RoutingTable::new(
+        let table = std::sync::Arc::new(std::sync::RwLock::new(RoutingTable::new(
             self.routes.into(),
             self.routing_partition,
-        ));
+        )));
+        // ILP packet services:
+        let router_svc = RouterService::new(client, std::sync::Arc::clone(&table));
         let echo_svc = EchoService::new(address.clone(), router_svc);
         let big_query_svc = BigQueryService::new(
             address.clone(),
             self.big_query_service,
+            table,
             echo_svc,
         ).await?;
 

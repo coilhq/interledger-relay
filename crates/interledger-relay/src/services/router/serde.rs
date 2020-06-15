@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use serde::de::{Deserialize, Deserializer};
@@ -15,6 +16,7 @@ struct RouteMap(HashMap<String, Vec<RouteData>>);
 #[serde(deny_unknown_fields)]
 struct RouteData {
     pub next_hop: NextHop,
+    pub account: Arc<String>,
     pub failover: Option<RouteFailover>,
     #[serde(default = "default_partition")]
     pub partition: f64,
@@ -52,6 +54,7 @@ impl<'de> Deserialize<'de> for RoutingTableData {
                 routes.push(StaticRoute {
                     target_prefix: prefix.clone(),
                     next_hop: route_data.next_hop,
+                    account: route_data.account,
                     failover: route_data.failover,
                     partition: route_data.partition,
                 });

@@ -61,6 +61,7 @@ lazy_static! {
     pub static ref ROUTES: Vec<StaticRoute> = vec![
         StaticRoute {
             target_prefix: Bytes::from("test.alice."),
+            account: Arc::new("alice".to_owned()),
             next_hop: NextHop::Bilateral {
                 endpoint: format!("{}/alice", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
                 auth: Some(AuthToken::new("alice_auth")),
@@ -70,6 +71,7 @@ lazy_static! {
         },
         StaticRoute {
             target_prefix: Bytes::from("test.relay."),
+            account: Arc::new("bob".to_owned()),
             next_hop: NextHop::Multilateral {
                 endpoint_prefix: Bytes::from(format!("{}/bob/", RECEIVER_ORIGIN)),
                 endpoint_suffix: Bytes::from("/ilp"),
@@ -80,6 +82,7 @@ lazy_static! {
         },
         StaticRoute {
             target_prefix: Bytes::from(""),
+            account: Arc::new("default".to_owned()),
             next_hop: NextHop::Bilateral {
                 endpoint: format!("{}/default", RECEIVER_ORIGIN).parse::<Uri>().unwrap(),
                 auth: Some(AuthToken::new("default_auth")),
