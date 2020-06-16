@@ -166,7 +166,7 @@ impl Client {
             return self.decode_response(uri, body);
         }
 
-        const TRUNCATE_BODY: usize = 32;
+        const TRUNCATE_BODY: usize = 64;
         let body_str = str::from_utf8(&body);
         let body_str = body_str.map(|s| truncate(s, TRUNCATE_BODY));
         let prepare_str = base64::encode(&prepare);
