@@ -29,6 +29,23 @@ pub trait Service<Req: Request>: Clone {
 pub trait Request: Into<ilp::Prepare> + Borrow<ilp::Prepare> {}
 impl Request for ilp::Prepare {}
 
+#[derive(Debug)]
+pub(crate) struct ResponseWithRoute {
+    pub(crate) packet: ResponsePacket,
+    pub(crate) route: Option<services::RouteIndex>,
+}
+
+type ResponsePacket = Result<ilp::Fulfill, ilp::Reject>;
+
+impl From<ResponsePacket> for ResponseWithRoute {
+    fn from(packet: ResponsePacket) -> Self {
+        ResponseWithRoute {
+            packet,
+            route: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Relation {
     Child,

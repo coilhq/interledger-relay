@@ -6,6 +6,10 @@ use futures::future::{Either, Ready, err};
 use crate::{Request, Service};
 use ilp::oer::BufOerExt;
 
+// TODO: disabled this for now. To make it work, it needs to generate a
+// `RequestFromPeer` instead of an `ilp::Prepare` so that it will play nice
+// with the service chain.
+
 const MIN_MESSAGE_WINDOW: time::Duration = time::Duration::from_secs(1);
 
 static ECHO_REQUEST_PREFIX: &[u8] = b"ECHOECHOECHOECHO\x00";

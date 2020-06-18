@@ -16,6 +16,7 @@ struct RouteMap(HashMap<String, Vec<RouteData>>);
 #[serde(deny_unknown_fields)]
 struct RouteData {
     pub next_hop: NextHop,
+    /// The destination "account" -- tagged as `to_account` in BigQuery logs.
     pub account: Arc<String>,
     pub failover: Option<RouteFailover>,
     #[serde(default = "default_partition")]

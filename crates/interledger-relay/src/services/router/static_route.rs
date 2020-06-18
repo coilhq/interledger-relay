@@ -15,6 +15,8 @@ use crate::serde::deserialize_uri;
 pub struct StaticRoute {
     pub target_prefix: Bytes,
     pub next_hop: NextHop,
+    /// A label for the route. This is tagged as the `to_account` when a packet
+    /// is logged to BigQuery.
     pub account: Arc<String>,
     pub failover: Option<RouteFailover>,
     /// Positive shares of the packets. For example, given the following routes

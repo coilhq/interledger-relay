@@ -8,12 +8,12 @@ use std::sync::Arc;
 use std::time;
 
 use futures::prelude::*;
-use log::{debug, warn};
+use log::{debug, error, warn};
 use yup_oauth2 as oauth2;
 
 pub use self::table::BigQueryConfig;
-use crate::{RoutingTable, Service};
-use crate::services::RequestWithFrom;
+use crate::Service;
+use crate::services::{RequestWithFrom, RouterService};
 use self::client::{BigQueryClient, BigQueryError};
 use self::logger::{Logger, LoggerConfig};
 use self::logger_queue::LoggerQueue;
@@ -37,24 +37,19 @@ pub struct RowData {
 /// This service logs batches of packets to BigQuery. It will cease to route packets
 /// when it detects that BigQuery is unavailable.
 #[derive(Clone, Debug)]
-pub struct BigQueryService<S> {
+pub struct BigQueryService {
     address: ilp::Address,
-    next: S,
+    next: RouterService,
     flush_interval: time::Duration,
-    routes: Arc<std::sync::RwLock<RoutingTable>>,
     logger: Arc<Logger<RowData>>,
 }
 
-impl<S> BigQueryService<S>
-where
-    S: 'static + Clone + Send + Sync,
-{
+impl BigQueryService {
     #[inline]
     pub async fn new(
         address: ilp::Address,
         config: Option<LoggerConfig>,
-        routes: Arc<std::sync::RwLock<RoutingTable>>,
-        next: S,
+        next: RouterService,
     ) -> Result<Self, oauth2::Error> {
         let has_config = config.is_some();
         let flush_interval = config
@@ -69,7 +64,6 @@ where
             address,
             next,
             flush_interval,
-            routes,
             logger: Arc::new(logger),
         };
         if has_config {
@@ -122,9 +116,8 @@ where
     }
 }
 
-impl<S, Req> Service<Req> for BigQueryService<S>
+impl<Req> Service<Req> for BigQueryService
 where
-    S: 'static + Service<Req> + Send + Sync,
     Req: RequestWithFrom + Send + 'static,
 {
     type Future = Pin<Box<
@@ -135,21 +128,13 @@ where
 
     fn call(self, request: Req) -> Self::Future {
         let prepare = request.borrow();
-        let account = Arc::clone(request.from_account());
+        let from_account = Arc::clone(request.from_account());
         let destination = prepare.destination()
             .split_connection_tag()
             .map(|(addr, _tag)| addr)
             .unwrap_or_else(|| prepare.destination())
             .to_address();
         let amount = prepare.amount();
-
-        let to_account = {
-            let routes = self.routes.read().unwrap();
-            routes
-                .resolve(prepare)
-                .ok()
-                .map(|(_index, route)| Arc::clone(&route.config.account))
-        };
 
         Box::pin(async move {
             if self.logger.is_dummy() {
@@ -158,8 +143,8 @@ where
 
             if !self.logger.is_available() {
                 warn!(
-                    "BigQuery unavailable, dropping packet: account={} destination={} amount={}",
-                    account, destination, amount,
+                    "BigQuery unavailable, dropping packet: from_account={} destination={} amount={}",
+                    from_account, destination, amount,
                 );
                 return Err(ilp::RejectBuilder {
                     code: ilp::ErrorCode::T03_CONNECTOR_BUSY,
@@ -169,11 +154,21 @@ where
                 }.build());
             }
 
-            let fulfill = self.next.clone().call(request).await?;
-            // XXX this is a hack
-            let to_account = to_account.unwrap_or_else(|| Arc::new("unknown".to_owned()));
+            let response = self.next.clone().forward(request.into()).await;
+            let fulfill = response.packet?;
+            let route_index = response.route;
+            let to_account = route_index
+                .map(|route| self.next.get_account(route))
+                .unwrap_or_else(|| {
+                    // This branch should be unreachable, but just to be safe:
+                    error!(
+                        "could not determine to_account: destination={} route={:?}",
+                        &destination, route_index,
+                    );
+                    Arc::new("unknown".to_owned())
+                });
             self.logger.write(Row::new(RowData {
-                account,
+                account: from_account,
                 to_account,
                 destination,
                 amount,

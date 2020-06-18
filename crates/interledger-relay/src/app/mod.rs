@@ -8,7 +8,7 @@ pub use self::config::{ConnectorRoot, RelationConfig, SetupError};
 use crate::{Client, RoutingPartition, RoutingTable, RoutingTableData};
 use crate::middlewares::{AuthTokenFilter, HealthCheckFilter, MethodFilter, PreStopFilter, Receiver};
 use crate::services::{BigQueryService, BigQueryServiceConfig};
-use crate::services::{ConfigService, DebugService, DebugServiceOptions, EchoService};
+use crate::services::{ConfigService, DebugService, DebugServiceOptions};
 use crate::services::{ExpiryService, FromPeerService, RouterService};
 use ilp::ildcp;
 
@@ -40,9 +40,7 @@ pub type Connector =
             // ILP Services:
             DebugService<ExpiryService<FromPeerService<
                 // RequestWithFrom:
-                ConfigService<BigQueryService<EchoService<
-                    RouterService
-                >>>
+                ConfigService<BigQueryService>
             >>>
         >
     >>>>;
@@ -72,19 +70,17 @@ impl Config {
             .collect::<Result<Vec<_>, _>>()?;
 
         let client = Client::new(address.clone());
-        let table = std::sync::Arc::new(std::sync::RwLock::new(RoutingTable::new(
+        // ILP packet services:
+        let router_svc = RouterService::new(client, RoutingTable::new(
             self.routes.into(),
             self.routing_partition,
-        )));
-        // ILP packet services:
-        let router_svc = RouterService::new(client, std::sync::Arc::clone(&table));
-        let echo_svc = EchoService::new(address.clone(), router_svc);
+        ));
         let big_query_svc = BigQueryService::new(
             address.clone(),
             self.big_query_service,
-            table,
-            echo_svc,
+            router_svc,
         ).await?;
+        //let echo_svc = EchoService::new(address.clone(), big_query_svc.clone());
 
         let ildcp_svc = ConfigService::new(ildcp, big_query_svc.clone());
         let from_peer_svc =

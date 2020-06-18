@@ -32,7 +32,7 @@ struct RouteGroup {
 
 /// Uniquely identify a route within a `RoutingTable`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct RouteIndex {
+pub struct RouteIndex {
     /// Index within `RoutingTable.groups`.
     pub(crate) group_index: usize,
     /// Index within `RouteGroup.routes`.
@@ -126,7 +126,6 @@ impl RouteIndex {
     }
 }
 
-#[cfg(test)]
 impl std::ops::Index<RouteIndex> for RoutingTable {
     type Output = DynamicRoute;
     fn index(&self, index: RouteIndex) -> &Self::Output {

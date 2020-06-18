@@ -127,6 +127,8 @@ impl RequestWithFrom for RequestFromPeer {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConnectorPeer {
     pub relation: Relation,
+    /// A label for the peer. This is tagged as the `account` (i.e. the originating
+    /// account) when a packet is logged to BigQuery.
     pub account: Arc<String>,
     pub address: ilp::Address,
     /// The list of valid incoming authentication tokens.

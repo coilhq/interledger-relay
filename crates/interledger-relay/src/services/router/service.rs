@@ -2,13 +2,13 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use bytes::Bytes;
-use futures::future::{Either, err};
+use futures::future::Either;
 use futures::prelude::*;
 use log::{debug, warn};
 
-use crate::{Service, Request};
+use crate::{Service, Request, ResponseWithRoute};
 use crate::client::{Client, RequestOptions};
-use super::{RoutingError, RoutingTable};
+use super::{RouteIndex, RoutingError, RoutingTable};
 
 #[derive(Clone, Debug)]
 pub struct RouterService {
@@ -19,7 +19,7 @@ pub struct RouterService {
 #[derive(Debug)]
 struct ServiceData {
     address: ilp::Address,
-    routes: Arc<RwLock<RoutingTable>>,
+    routes: RwLock<RoutingTable>,
 }
 
 impl<Req> Service<Req> for RouterService
@@ -33,17 +33,19 @@ where
     >>;
 
     fn call(self, request: Req) -> Self::Future {
-        Box::pin(self.forward(request.into()))
+        Box::pin({
+            self.forward(request.into())
+                .map(|response| response.packet)
+        })
     }
 }
 
 impl RouterService {
-    pub fn new(client: Client, routes: Arc<RwLock<RoutingTable>>) -> Self {
+    pub fn new(client: Client, routes: RoutingTable) -> Self {
         RouterService {
             data: Arc::new(ServiceData {
                 address: client.address().clone(),
-                //routes: RwLock::new(routes),
-                routes,
+                routes: RwLock::new(routes),
             }),
             client,
         }
@@ -55,9 +57,19 @@ impl RouterService {
         *routes = new_routes;
     }
 
-    fn forward(self, prepare: ilp::Prepare)
-        -> impl Future<Output = Result<ilp::Fulfill, ilp::Reject>>
+    pub(crate) fn get_account(&self, route_index: RouteIndex) -> Arc<String> {
+        let routes = self.data.routes.read().unwrap();
+        Arc::clone(&routes[route_index].config.account)
+    }
+
+    pub(crate) fn forward(self, prepare: ilp::Prepare)
+        //-> impl Future<Output = Result<ilp::Fulfill, ilp::Reject>>
+        -> impl Future<Output = ResponseWithRoute>
     {
+        fn fail(reject: ilp::Reject) -> future::Ready<ResponseWithRoute> {
+            future::ready(ResponseWithRoute::from(Err(reject)))
+        }
+
         let routes = self.data.routes.read().unwrap();
         let (route_index, route) = match routes.resolve(&prepare) {
             Ok((i, route)) => (i, route),
@@ -66,7 +78,7 @@ impl RouterService {
                     "no route exists: destination=\"{}\"",
                     prepare.destination(),
                 );
-                return Either::Right(err(self.make_reject(
+                return Either::Right(fail(self.make_reject(
                     ilp::ErrorCode::F02_UNREACHABLE,
                     b"no route exists",
                 )));
@@ -76,7 +88,7 @@ impl RouterService {
                     "no healthy route found: destination=\"{}\"",
                     prepare.destination(),
                 );
-                return Either::Right(err(self.make_reject(
+                return Either::Right(fail(self.make_reject(
                     ilp::ErrorCode::T01_PEER_UNREACHABLE,
                     b"no healthy route found",
                 )));
@@ -92,7 +104,7 @@ impl RouterService {
             Ok(uri) => uri,
             Err(error) => {
                 warn!("error generating endpoint: error={}", error);
-                return Either::Right(err(self.make_reject(
+                return Either::Right(fail(self.make_reject(
                     ilp::ErrorCode::F02_UNREACHABLE,
                     b"invalid address segment",
                 )));
@@ -120,6 +132,10 @@ impl RouterService {
                         .unwrap()
                         .update(route_index, is_success)
                 }
+            })
+            .map(move |packet| ResponseWithRoute {
+                packet,
+                route: Some(route_index),
             });
 
         Either::Left(do_request)
@@ -165,9 +181,7 @@ mod test_router_service {
         static ref CLIENT: Client = Client::new(ADDRESS.to_address());
         static ref ROUTER: RouterService = RouterService::new(
             CLIENT.clone(),
-            Arc::new(RwLock::new({
-                RoutingTable::new(ROUTES.clone(), RoutingPartition::default())
-            })),
+            RoutingTable::new(ROUTES.clone(), RoutingPartition::default()),
         );
     }
 
@@ -206,7 +220,7 @@ mod test_router_service {
 
     #[test]
     fn test_mark_as_unhealthy() {
-        let router = RouterService::new(CLIENT.clone(), Arc::new(RwLock::new(RoutingTable::new(vec![
+        let router = RouterService::new(CLIENT.clone(), RoutingTable::new(vec![
             StaticRoute {
                 failover: Some(RouteFailover {
                     window_size: 20,
@@ -215,7 +229,7 @@ mod test_router_service {
                 }),
                 ..ROUTES[0].clone()
             },
-        ], RoutingPartition::default()))));
+        ], RoutingPartition::default()));
         testing::MockServer::new()
             .test_request(|req| { assert_eq!(req.uri().path(), "/alice"); })
             .test_body(|body| { assert_eq!(body.as_ref(), testing::PREPARE.as_ref()); })
@@ -276,9 +290,7 @@ mod test_router_service {
         }.build();
         let router = RouterService::new(
             CLIENT.clone(),
-            Arc::new(RwLock::new(
             RoutingTable::new(vec![ROUTES[1].clone()], RoutingPartition::default()),
-            )),
         );
         testing::MockServer::new().run({
             router
