@@ -12,8 +12,8 @@ use log::{debug, error, warn};
 use yup_oauth2 as oauth2;
 
 pub use self::table::BigQueryConfig;
-use crate::Service;
-use crate::services::{RequestWithFrom, RouterService};
+use crate::{RequestWithFrom, Service};
+use crate::services::RouterService;
 use self::client::{BigQueryClient, BigQueryError};
 use self::logger::{Logger, LoggerConfig};
 use self::logger_queue::LoggerQueue;

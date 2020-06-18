@@ -1,13 +1,11 @@
-use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use futures::future::{Either, Ready, err};
 use log::error;
 
-use crate::{AuthToken, Relation, Request, Service};
-use crate::middlewares::RequestWithHeaders;
-use crate::services::RequestWithPeerName;
+use crate::{AuthToken, Relation, Service};
+use crate::{RequestFromPeer, RequestWithHeaders};
 
 /// Use the incoming `Authorization` header to tag requests with their peer's
 /// address.
@@ -16,12 +14,6 @@ pub struct FromPeerService<S> {
     address: ilp::Address,
     peers: Arc<Vec<ConnectorPeer>>,
     next: S,
-}
-
-pub trait RequestWithFrom: Request {
-    fn from_account(&self) -> &Arc<String>;
-    fn from_relation(&self) -> Relation;
-    fn from_address(&self) -> ilp::Addr;
 }
 
 impl<S> FromPeerService<S> {
@@ -79,48 +71,6 @@ where
             from_relation: peer.relation,
             from_address: peer.address.clone(),
         }))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RequestFromPeer {
-    base: RequestWithHeaders,
-    from_account: Arc<String>,
-    from_relation: Relation,
-    from_address: ilp::Address,
-}
-
-impl Request for RequestFromPeer {}
-
-impl Into<ilp::Prepare> for RequestFromPeer {
-    fn into(self) -> ilp::Prepare {
-        self.base.into()
-    }
-}
-
-impl Borrow<ilp::Prepare> for RequestFromPeer {
-    fn borrow(&self) -> &ilp::Prepare {
-        self.base.borrow()
-    }
-}
-
-impl RequestWithPeerName for RequestFromPeer {
-    fn peer_name(&self) -> Option<&[u8]> {
-        self.base.peer_name()
-    }
-}
-
-impl RequestWithFrom for RequestFromPeer {
-    fn from_account(&self) -> &Arc<String> {
-        &self.from_account
-    }
-
-    fn from_relation(&self) -> Relation {
-        self.from_relation
-    }
-
-    fn from_address(&self) -> ilp::Addr {
-        self.from_address.as_addr()
     }
 }
 

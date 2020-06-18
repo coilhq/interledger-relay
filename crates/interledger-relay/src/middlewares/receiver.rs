@@ -1,4 +1,3 @@
-use std::borrow::Borrow;
 use std::pin::Pin;
 
 use bytes::BytesMut;
@@ -8,11 +7,8 @@ use futures::task::{Context, Poll};
 use hyper::StatusCode;
 use log::warn;
 
-use crate::{Request, Service};
+use crate::{RequestWithHeaders, Service};
 use crate::combinators::{self, LimitStreamError};
-use crate::services;
-
-static PEER_NAME: &str = "ILP-Peer-Name";
 
 const MAX_REQUEST_SIZE: usize = {
     const ENVELOPE: usize = 1 + 8;
@@ -106,50 +102,6 @@ where
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct RequestWithHeaders {
-    prepare: ilp::Prepare,
-    headers: hyper::HeaderMap,
-}
-
-impl Request for RequestWithHeaders {}
-
-impl RequestWithHeaders {
-    #[cfg(test)]
-    pub fn new(prepare: ilp::Prepare, headers: hyper::HeaderMap) -> Self {
-        RequestWithHeaders { prepare, headers }
-    }
-
-    pub fn header<K>(&self, header_name: K) -> Option<&[u8]>
-    where
-        K: hyper::header::AsHeaderName,
-    {
-        self.headers.get(header_name)
-            .map(|header| header.as_ref())
-    }
-}
-
-impl Into<ilp::Prepare> for RequestWithHeaders {
-    fn into(self) -> ilp::Prepare {
-        self.prepare
-    }
-}
-
-impl Borrow<ilp::Prepare> for RequestWithHeaders {
-    fn borrow(&self) -> &ilp::Prepare {
-        &self.prepare
-    }
-}
-
-impl services::RequestWithPeerName for RequestWithHeaders {
-    fn peer_name(&self) -> Option<&[u8]> {
-        // TODO I think this copies the name into a HeaderName every call, which isn't ideal
-        self.headers
-            .get(PEER_NAME)
-            .map(|header| header.as_ref())
-    }
-}
-
 fn make_http_response(packet: Result<ilp::Fulfill, ilp::Reject>)
     -> hyper::Response<hyper::Body>
 {
@@ -171,7 +123,7 @@ mod test_receiver {
     use bytes::{BufMut, Bytes};
     use futures::executor::block_on;
 
-    use crate::services::RequestWithPeerName;
+    use crate::RequestWithPeerName;
     use crate::testing::{IlpResult, MockService, PanicService};
     use crate::testing::{PREPARE, FULFILL, REJECT};
     use super::*;

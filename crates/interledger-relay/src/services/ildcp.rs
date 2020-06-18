@@ -3,19 +3,13 @@ use std::sync::Arc;
 use futures::future::{Either, Ready, err, ok};
 use log::warn;
 
-use crate::{Relation, Request, Service};
+use crate::{Relation, RequestWithFrom, RequestWithPeerName, Service};
 use ilp::ildcp;
-use super::RequestWithFrom;
 
 #[derive(Clone, Debug)]
 pub struct ConfigService<S> {
     config: Arc<ildcp::Response>,
     next: S,
-}
-
-pub trait RequestWithPeerName: Request {
-    /// The value of the `ILP-Peer-Name` header.
-    fn peer_name(&self) -> Option<&[u8]>;
 }
 
 impl<S> ConfigService<S> {
@@ -108,6 +102,7 @@ mod test_config_service {
     use futures::executor::block_on;
     use lazy_static::lazy_static;
 
+    use crate::Request;
     use crate::testing::{FULFILL, MockService, PREPARE};
     use super::*;
 

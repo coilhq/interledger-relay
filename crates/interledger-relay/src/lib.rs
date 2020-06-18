@@ -2,17 +2,17 @@ pub mod app;
 mod client;
 mod combinators;
 mod middlewares;
+mod packets;
 mod serde;
 mod services;
 #[cfg(test)]
 mod testing;
 
-use std::borrow::Borrow;
-
 use futures::prelude::*;
 
 pub use self::client::Client;
 pub use self::middlewares::AuthToken;
+pub use self::packets::*;
 pub use self::services::{BigQueryConfig, BigQueryServiceConfig, DebugServiceOptions};
 pub use self::services::{NextHop, RouteFailover, RoutingPartition, RoutingTable, RoutingTableData, StaticRoute};
 
@@ -26,25 +26,6 @@ pub trait Service<Req: Request>: Clone {
     fn call(self, request: Req) -> Self::Future;
 }
 
-pub trait Request: Into<ilp::Prepare> + Borrow<ilp::Prepare> {}
-impl Request for ilp::Prepare {}
-
-#[derive(Debug)]
-pub(crate) struct ResponseWithRoute {
-    pub(crate) packet: ResponsePacket,
-    pub(crate) route: Option<services::RouteIndex>,
-}
-
-type ResponsePacket = Result<ilp::Fulfill, ilp::Reject>;
-
-impl From<ResponsePacket> for ResponseWithRoute {
-    fn from(packet: ResponsePacket) -> Self {
-        ResponseWithRoute {
-            packet,
-            route: None,
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Relation {
