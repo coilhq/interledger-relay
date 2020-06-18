@@ -1,10 +1,25 @@
 use std::pin::Pin;
 
 use futures::prelude::*;
-use log::debug;
+use log::{debug, warn};
 use serde::Deserialize;
 
 use crate::{Request, Service};
+
+/// These errors are more unusual, so they should be logged as warnings rather
+/// than just debug.
+static WARNINGS: &[ilp::ErrorCode] = &[
+    ilp::ErrorCode::F01_INVALID_PACKET,
+    ilp::ErrorCode::F02_UNREACHABLE,
+    ilp::ErrorCode::F05_WRONG_CONDITION,
+    ilp::ErrorCode::F06_UNEXPECTED_PAYMENT,
+    ilp::ErrorCode::F07_CANNOT_RECEIVE,
+    ilp::ErrorCode::T03_CONNECTOR_BUSY,
+    ilp::ErrorCode::T05_RATE_LIMITED,
+    ilp::ErrorCode::R00_TRANSFER_TIMED_OUT,
+    ilp::ErrorCode::R01_INSUFFICIENT_SOURCE_AMOUNT,
+    ilp::ErrorCode::R02_INSUFFICIENT_TIMEOUT,
+];
 
 /// Prints the requests and responses to stdout.
 #[derive(Clone, Debug)]
@@ -58,7 +73,11 @@ where
                         debug!("{}: {:?}", prefix, fulfill)
                     },
                     Err(reject) => if options.log_reject {
-                        debug!("{}: {:?}", prefix, reject)
+                        if WARNINGS.contains(&reject.code()) {
+                            warn!("{}: {:?}", prefix, reject)
+                        } else {
+                            debug!("{}: {:?}", prefix, reject)
+                        }
                     },
                 }
             }))
