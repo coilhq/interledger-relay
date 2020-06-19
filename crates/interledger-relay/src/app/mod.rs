@@ -87,8 +87,7 @@ impl Config {
             FromPeerService::new(address.clone(), peers, ildcp_svc);
         let expiry_svc =
             ExpiryService::new(address, DEFAULT_MAX_TIMEOUT, from_peer_svc);
-        let debug_svc =
-            DebugService::new("packet", self.debug_service, expiry_svc);
+        let debug_svc = DebugService::new(self.debug_service, expiry_svc);
 
         // Middlewares:
         let receiver = Receiver::new(debug_svc);

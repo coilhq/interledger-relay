@@ -21,10 +21,11 @@ static WARNINGS: &[ilp::ErrorCode] = &[
     ilp::ErrorCode::R02_INSUFFICIENT_TIMEOUT,
 ];
 
+const ADDRESS_PREFIX_SIZE: usize = 64;
+
 /// Prints the requests and responses to stdout.
 #[derive(Clone, Debug)]
 pub struct DebugService<S> {
-    prefix: &'static str,
     options: DebugServiceOptions,
     next: S,
 }
@@ -40,11 +41,10 @@ pub struct DebugServiceOptions {
 impl<S> DebugService<S> {
     #[inline]
     pub fn new(
-        prefix: &'static str,
         options: DebugServiceOptions,
         next: S,
     ) -> Self {
-        DebugService { prefix, options, next }
+        DebugService { options, next }
     }
 }
 
@@ -60,23 +60,42 @@ where
     >>;
 
     fn call(self, request: Req) -> Self::Future {
-        let prefix = self.prefix;
         let options = self.options.clone();
         if options.log_prepare {
-            debug!("{}: {:?}", prefix, request.borrow());
+            debug!("request: {:?}", request.borrow());
         }
+
+        // Store a fixed-length prefix of the destination address on the stack
+        // so that it can be logged.
+        let destination = request.borrow().destination();
+        let mut destination_prefix = [0_u8; ADDRESS_PREFIX_SIZE];
+        let len = std::cmp::min(ADDRESS_PREFIX_SIZE, destination.as_ref().len());
+        destination_prefix[..len].copy_from_slice({
+            &destination.as_ref()[..len]
+        });
 
         Box::pin(self.next.call(request)
             .inspect(move |response| {
+                let destination_prefix = std::str::from_utf8(&destination_prefix)
+                    .unwrap_or("[invalid]");
                 match response {
                     Ok(fulfill) => if options.log_fulfill {
-                        debug!("{}: {:?}", prefix, fulfill)
+                        debug!(
+                            "response: destination[..{}]={} {:?}",
+                            ADDRESS_PREFIX_SIZE, destination_prefix, fulfill,
+                        );
                     },
                     Err(reject) => if options.log_reject {
                         if WARNINGS.contains(&reject.code()) {
-                            warn!("{}: {:?}", prefix, reject)
+                            warn!(
+                                "response: destination[..{}]={} {:?}",
+                                ADDRESS_PREFIX_SIZE, destination_prefix, reject,
+                            );
                         } else {
-                            debug!("{}: {:?}", prefix, reject)
+                            debug!(
+                                "response: destination[..{}]={} {:?}",
+                                ADDRESS_PREFIX_SIZE, destination_prefix, reject,
+                            );
                         }
                     },
                 }
@@ -91,5 +110,27 @@ impl Default for DebugServiceOptions {
             log_fulfill: false,
             log_reject: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod test_debug_service {
+    use futures::executor::block_on;
+
+    use crate::testing;
+    use super::*;
+
+    #[test]
+    fn test_call() {
+        let receiver = testing::MockService::new(Ok(testing::FULFILL.clone()));
+        let service = DebugService::new(DebugServiceOptions {
+            log_prepare: true,
+            log_fulfill: true,
+            log_reject: true,
+        }, receiver);
+        assert_eq!(
+            block_on(service.call(testing::PREPARE.clone())),
+            Ok(testing::FULFILL.clone()),
+        );
     }
 }
